@@ -45,6 +45,12 @@
             font-size: 18px;
             color: #00ccff;
         }
+        #round-display {
+            font-size: 24px;
+            color: #ffff00;
+            margin-top: 10px;
+            text-shadow: 0 0 5px #ffff00;
+        }
         /* HP表示の追加スタイル */
         #hp-container {
             margin-top: 10px;
@@ -133,6 +139,7 @@
 
     <div id="score-display">ABSORBED: 0</div>
     <div id="level-display">NEXT LV: 10</div>
+    <div id="round-display">ROUND 1</div>
 </div>
 
 <div id="upgrade-menu">
@@ -149,6 +156,7 @@
     const ctx = canvas.getContext('2d');
     const scoreEl = document.getElementById('score-display');
     const levelEl = document.getElementById('level-display');
+    const roundEl = document.getElementById('round-display');
     const upgradeMenu = document.getElementById('upgrade-menu');
     
     // HP UI要素
@@ -158,6 +166,12 @@
     let width, height;
     let score = 0;
     let isPaused = false;
+
+    // ラウンド・遷移管理
+    let currentRound = 1;
+    let isTransitioning = false;
+    let transitionTimer = 0;
+    const mapColors = ['#222', '#1a1a2e', '#16213e', '#0f3460', '#1a1a1a'];
 
     // レベルシステム設定
     let nextLevelThreshold = 10;
@@ -610,8 +624,67 @@
         }
     };
 
+    function completeTransition() {
+        // ラウンドが進むごとに拡大率を指数関数的に増やす
+        const expansionFactor = 2 * Math.pow(1.2, currentRound - 1);
+        const scale = 1 / expansionFactor;
+
+        currentRound++;
+        roundEl.innerText = `ROUND ${currentRound}`;
+
+        // 全てのエンティティを縮小・中央寄せ（シームレスな拡大）
+        const rescale = (obj) => {
+            obj.x = width / 2 + (obj.x - width / 2) * scale;
+            obj.y = height / 2 + (obj.y - height / 2) * scale;
+            if (obj.radius) obj.radius *= scale;
+            if (obj.vx) obj.vx *= scale;
+            if (obj.vy) obj.vy *= scale;
+        };
+
+        rescale(slime);
+        humans.forEach(rescale);
+        bullets.forEach(rescale);
+        minions.forEach(rescale);
+        particles.forEach(p => {
+            p.x = width / 2 + (p.x - width / 2) * scale;
+            p.y = height / 2 + (p.y - height / 2) * scale;
+            p.vx *= scale;
+            p.vy *= scale;
+        });
+
+        // 新しく広がったエリア（外周）に人間を補充
+        // 拡大率に合わせて補充する人数も増やす
+        const spawnCount = Math.floor(MAX_HUMANS * Math.pow(1.5, currentRound - 2));
+        const low = (1 - scale) / 2;
+        const high = (1 + scale) / 2;
+
+        for (let i = 0; i < spawnCount; i++) {
+            const h = new Human();
+            let safe = false;
+            while(!safe) {
+                h.x = random(0, width);
+                h.y = random(0, height);
+                const inOldArea = h.x > width * low && h.x < width * high && 
+                                 h.y > height * low && h.y < height * high;
+                if (!inOldArea) {
+                    const dist = Math.hypot(h.x - slime.x, h.y - slime.y);
+                    if (dist > slime.radius + 100) safe = true;
+                }
+            }
+            humans.push(h);
+        }
+
+        isTransitioning = false;
+    }
+
     function loop() {
         requestAnimationFrame(loop);
+
+        // 巨大化によるラウンド移行チェック
+        if (!isPaused && !isTransitioning && slime.radius * 2 > Math.min(width, height) / 3) {
+            isTransitioning = true;
+            transitionTimer = 120;
+        }
 
         if (isPaused) {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
@@ -619,8 +692,57 @@
             return;
         }
 
-        ctx.fillStyle = 'rgba(34, 34, 34, 0.4)';
+        if (isTransitioning) {
+            transitionTimer--;
+            const progress = 1 - (transitionTimer / 120);
+            
+            // 現在のラウンドに応じた目標スケールを計算
+            const targetExpansionFactor = 2 * Math.pow(1.2, currentRound - 1);
+            const targetScale = 1 / targetExpansionFactor;
+            
+            const scale = 1 - (progress * (1 - targetScale));
+
+            // 次のラウンドの背景色を「広がったフィールド」として描画
+            const nextBgColor = mapColors[currentRound % mapColors.length];
+            ctx.fillStyle = nextBgColor;
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.save();
+            // 中央に向かって縮小していく演出
+            ctx.translate(width / 2, height / 2);
+            ctx.scale(scale, scale);
+            ctx.translate(-width / 2, -height / 2);
+
+            // 元のフィールド範囲を描画
+            const currentBgColor = mapColors[(currentRound - 1) % mapColors.length];
+            ctx.fillStyle = currentBgColor;
+            ctx.fillRect(0, 0, width, height);
+            
+            // フィールドの境界線
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 5;
+            ctx.strokeRect(0, 0, width, height);
+
+            // 既存のエンティティを描画
+            slime.draw();
+            humans.forEach(h => h.draw());
+            bullets.forEach(b => b.draw());
+            minions.forEach(m => m.draw());
+            drawParticles();
+
+            ctx.restore();
+
+            if (transitionTimer <= 0) {
+                completeTransition();
+            }
+            return;
+        }
+
+        const bgColor = mapColors[(currentRound - 1) % mapColors.length];
+        ctx.fillStyle = bgColor;
+        ctx.globalAlpha = 0.4;
         ctx.fillRect(0, 0, width, height);
+        ctx.globalAlpha = 1.0;
 
         // --- 人間 ---
         humans.forEach(h => {
