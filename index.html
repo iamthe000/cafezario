@@ -418,23 +418,31 @@ if ('serviceWorker' in navigator) {
             this.color = '#00ccff';
             this.life = 600; 
             this.markedForDeletion = false;
+            this.currentTarget = null;
+            this.retargetTimer = 0;
         }
 
         update() {
             if (isPaused) return;
 
-            let target = null;
-            let minStartDist = 9999;
-            for (const h of humans) {
-                const d = Math.hypot(h.x - this.x, h.y - this.y);
-                if (d < minStartDist) {
-                    minStartDist = d;
-                    target = h;
+            this.retargetTimer--;
+            if (!this.currentTarget || !this.currentTarget.active || this.retargetTimer <= 0) {
+                let minStartDist = 9999;
+                let nearest = null;
+                for (const h of humans) {
+                    if (!h.active) continue;
+                    const d = Math.hypot(h.x - this.x, h.y - this.y);
+                    if (d < minStartDist) {
+                        minStartDist = d;
+                        nearest = h;
+                    }
                 }
+                this.currentTarget = nearest;
+                this.retargetTimer = 60; // 1秒ごとにターゲットを見直す
             }
 
-            if (target) {
-                const angle = Math.atan2(target.y - this.y, target.x - this.x);
+            if (this.currentTarget) {
+                const angle = Math.atan2(this.currentTarget.y - this.y, this.currentTarget.x - this.x);
                 this.vx += Math.cos(angle) * 0.5;
                 this.vy += Math.sin(angle) * 0.5;
             }
