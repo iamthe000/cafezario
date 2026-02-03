@@ -425,6 +425,12 @@ if ('serviceWorker' in navigator) {
         update() {
             if (isPaused) return;
 
+            // ランダムな動きをベースに追加
+            if (Math.random() < 0.1) {
+                this.vx += random(-0.8, 0.8);
+                this.vy += random(-0.8, 0.8);
+            }
+
             this.retargetTimer--;
             if (!this.currentTarget || !this.currentTarget.active || this.retargetTimer <= 0) {
                 let minStartDist = 9999;
@@ -438,17 +444,18 @@ if ('serviceWorker' in navigator) {
                     }
                 }
                 this.currentTarget = nearest;
-                this.retargetTimer = 60; // 1秒ごとにターゲットを見直す
+                this.retargetTimer = random(30, 90); // 0.5〜1.5秒ごとにターゲットを見直す
             }
 
             if (this.currentTarget) {
                 const angle = Math.atan2(this.currentTarget.y - this.y, this.currentTarget.x - this.x);
-                this.vx += Math.cos(angle) * 0.5;
-                this.vy += Math.sin(angle) * 0.5;
+                // 追尾を弱めに設定
+                this.vx += Math.cos(angle) * 0.15;
+                this.vy += Math.sin(angle) * 0.15;
             }
 
-            this.vx *= 0.95;
-            this.vy *= 0.95;
+            this.vx *= 0.97; // 慣性を少し強く残す
+            this.vy *= 0.97;
             this.x += this.vx;
             this.y += this.vy;
 
