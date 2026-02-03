@@ -1,0 +1,13 @@
+{
+    "name": "cafezario",
+    "short_name": "cafezario",
+    "start_url": "index.html",
+    "display": "standalone",
+    "icons": [
+        {
+            "src": "icon192x192.PNG",
+            "sizes": "192x192",
+            "type": "image/png"
+        }
+    ]
+}
