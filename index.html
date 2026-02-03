@@ -471,10 +471,14 @@ if ('serviceWorker' in navigator) {
 
     class Human {
         constructor() {
+            this.active = true;
+            this.respawnTimer = 0;
             this.respawn();
         }
 
         respawn() {
+            this.active = true;
+            this.respawnTimer = 0;
             let safe = false;
             while(!safe) {
                 this.x = random(20, width - 20);
@@ -503,8 +507,21 @@ if ('serviceWorker' in navigator) {
             }
         }
 
+        die() {
+            this.active = false;
+            this.respawnTimer = random(120, 360);
+        }
+
         update() {
             if (isPaused) return;
+
+            if (!this.active) {
+                this.respawnTimer--;
+                if (this.respawnTimer <= 0) {
+                    this.respawn();
+                }
+                return;
+            }
 
             const distToSlime = Math.hypot(this.x - slime.x, this.y - slime.y);
             
@@ -547,6 +564,7 @@ if ('serviceWorker' in navigator) {
         }
 
         draw() {
+            if (!this.active) return;
             ctx.fillStyle = this.color;
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
@@ -763,6 +781,7 @@ if ('serviceWorker' in navigator) {
         // --- 人間 ---
         humans.forEach(h => {
             h.update();
+            if (!h.active) return;
             h.draw();
 
             const dist = Math.hypot(slime.x - h.x, slime.y - h.y);
@@ -785,7 +804,7 @@ if ('serviceWorker' in navigator) {
             const growthAmount = 0.5 / Math.pow(1.8, currentRound - 1);
             slime.grow(growthAmount);
             createParticles(h.x, h.y, h.color);
-            h.respawn();
+            h.die();
             checkLevelUp();
         }
 
