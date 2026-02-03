@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Unstable Slime: Evolved (HP Version)</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #222;
+            font-family: 'Courier New', sans-serif;
+            color: white;
+            user-select: none;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        h1 {
+            margin: 0;
+            font-size: 24px;
+            text-transform: uppercase;
+            color: #00ff88;
+            text-shadow: 0 0 10px #00ff88;
+        }
+        p {
+            margin: 5px 0;
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        #score-display {
+            font-size: 32px;
+            font-weight: bold;
+            color: #ff0055;
+        }
+        #level-display {
+            font-size: 18px;
+            color: #00ccff;
+        }
+        /* HP表示の追加スタイル */
+        #hp-container {
+            margin-top: 10px;
+            width: 200px;
+            height: 20px;
+            background-color: #444;
+            border: 2px solid #fff;
+            position: relative;
+        }
+        #hp-bar {
+            width: 100%;
+            height: 100%;
+            background-color: #00ff00;
+            transition: width 0.2s, background-color 0.2s;
+        }
+        #hp-text {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            text-align: center;
+            line-height: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 1px 1px 1px black;
+        }
+
+        /* レベルアップ選択画面 */
+        #upgrade-menu {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid #00ff88;
+            padding: 20px;
+            text-align: center;
+            border-radius: 10px;
+            z-index: 100;
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+        }
+        #upgrade-menu h2 {
+            margin-top: 0;
+            color: #fff;
+        }
+        .btn {
+            display: block;
+            width: 220px; /* 文字数が増えたので少し幅広に */
+            margin: 10px auto;
+            padding: 15px;
+            background: #333;
+            color: #00ff88;
+            border: 1px solid #00ff88;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 16px;
+            transition: 0.2s;
+        }
+        .btn:hover {
+            background: #00ff88;
+            color: #000;
+        }
+        .btn-secondary {
+            color: #00ccff;
+            border-color: #00ccff;
+        }
+        .btn-secondary:hover {
+            background: #00ccff;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>Unstable Slime</h1>
+    <p>PC: キーボード | Mobile: スワイプ・タッチ</p>
+    
+    <div id="hp-container">
+        <div id="hp-bar"></div>
+        <div id="hp-text">HP: 100 / 100</div>
+    </div>
+
+    <div id="score-display">ABSORBED: 0</div>
+    <div id="level-display">NEXT LV: 10</div>
+</div>
+
+<div id="upgrade-menu">
+    <h2>EVOLUTION CHOICE</h2>
+    <p>能力を選択してください</p>
+    <button class="btn" onclick="chooseUpgrade('heal')">再生進化 (HP全回復+最大HPUP)</button>
+    <button class="btn btn-secondary" onclick="chooseUpgrade('summon')">分裂召喚 (子スライム)</button>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score-display');
+    const levelEl = document.getElementById('level-display');
+    const upgradeMenu = document.getElementById('upgrade-menu');
+    
+    // HP UI要素
+    const hpBar = document.getElementById('hp-bar');
+    const hpText = document.getElementById('hp-text');
+
+    let width, height;
+    let score = 0;
+    let isPaused = false;
+
+    // レベルシステム設定
+    let nextLevelThreshold = 10;
+    let currentLevelThresholdBase = 10;
+    
+    // ゲーム設定
+    const FRICTION = 0.98;
+    const ACCELERATION = 0.8;
+    const UNSTABLE_FACTOR = 0.3;
+    const MAX_SPEED = 15;
+
+    // 入力管理
+    const keys = {
+        ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false,
+        w: false, s: false, a: false, d: false
+    };
+
+    const touchInput = { active: false, x: 0, y: 0 };
+
+    window.addEventListener('keydown', (e) => keys[e.key] = true);
+    window.addEventListener('keyup', (e) => keys[e.key] = false);
+    
+    window.addEventListener('touchstart', (e) => {
+        touchInput.active = true;
+        updateTouchPos(e.touches[0]);
+    }, {passive: false});
+    
+    window.addEventListener('touchmove', (e) => {
+        if(touchInput.active) {
+            updateTouchPos(e.touches[0]);
+        }
+        e.preventDefault();
+    }, {passive: false});
+
+    window.addEventListener('touchend', () => {
+        touchInput.active = false;
+    });
+
+    function updateTouchPos(touch) {
+        touchInput.x = touch.clientX - width / 2;
+        touchInput.y = touch.clientY - height / 2;
+    }
+
+    window.addEventListener('resize', resize);
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    resize();
+
+    const random = (min, max) => Math.random() * (max - min) + min;
+
+    // ----------------------------------------------------
+    // クラス定義
+    // ----------------------------------------------------
+
+    class Bullet {
+        constructor(x, y, targetX, targetY) {
+            this.x = x;
+            this.y = y;
+            const angle = Math.atan2(targetY - y, targetX - x);
+            const speed = 6;
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+            this.radius = 4;
+            this.markedForDeletion = false;
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            if (this.x < 0 || this.x > width || this.y < 0 || this.y > height) {
+                this.markedForDeletion = true;
+            }
+        }
+
+        draw() {
+            ctx.fillStyle = '#ff3333';
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    class Slime {
+        constructor() {
+            this.x = width / 2;
+            this.y = height / 2;
+            this.vx = 0;
+            this.vy = 0;
+            this.radius = 20;
+            this.color = '#00ff88';
+            this.wobblePhase = 0;
+
+            // HPシステムを追加
+            this.maxHp = 100;
+            this.hp = 100;
+            this.updateHpUI();
+        }
+
+        update() {
+            if (isPaused) return;
+
+            let ax = 0;
+            let ay = 0;
+
+            if (keys.ArrowUp || keys.w) ay -= ACCELERATION;
+            if (keys.ArrowDown || keys.s) ay += ACCELERATION;
+            if (keys.ArrowLeft || keys.a) ax -= ACCELERATION;
+            if (keys.ArrowRight || keys.d) ax += ACCELERATION;
+
+            if (touchInput.active) {
+                const angle = Math.atan2(touchInput.y, touchInput.x);
+                const dist = Math.min(Math.hypot(touchInput.x, touchInput.y), 100) / 100;
+                ax += Math.cos(angle) * ACCELERATION * dist * 1.5;
+                ay += Math.sin(angle) * ACCELERATION * dist * 1.5;
+            }
+
+            if (ax !== 0 || ay !== 0) {
+                ax += random(-UNSTABLE_FACTOR, UNSTABLE_FACTOR);
+                ay += random(-UNSTABLE_FACTOR, UNSTABLE_FACTOR);
+            }
+
+            this.vx += ax;
+            this.vy += ay;
+            this.vx *= FRICTION;
+            this.vy *= FRICTION;
+
+            const speed = Math.sqrt(this.vx**2 + this.vy**2);
+            if (speed > MAX_SPEED) {
+                this.vx = (this.vx / speed) * MAX_SPEED;
+                this.vy = (this.vy / speed) * MAX_SPEED;
+            }
+
+            this.x += this.vx;
+            this.y += this.vy;
+
+            if (this.x < this.radius) { this.x = this.radius; this.vx *= -0.8; }
+            if (this.x > width - this.radius) { this.x = width - this.radius; this.vx *= -0.8; }
+            if (this.y < this.radius) { this.y = this.radius; this.vy *= -0.8; }
+            if (this.y > height - this.radius) { this.y = height - this.radius; this.vy *= -0.8; }
+
+            this.wobblePhase += 0.1 + (speed * 0.05);
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            const segments = 12;
+            for (let i = 0; i <= segments; i++) {
+                const angle = (i / segments) * Math.PI * 2;
+                const r = this.radius + Math.sin(angle * 3 + this.wobblePhase) * (this.radius * 0.15) 
+                          + Math.cos(angle * 5 - this.wobblePhase) * (this.radius * 0.1);
+                const px = this.x + Math.cos(angle) * r;
+                const py = this.y + Math.sin(angle) * r;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fill();
+            
+            const speed = Math.sqrt(this.vx**2 + this.vy**2);
+            const lookX = speed > 0.1 ? (this.vx / speed) * (this.radius * 0.3) : 0;
+            const lookY = speed > 0.1 ? (this.vy / speed) * (this.radius * 0.3) : 0;
+
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(this.x - this.radius*0.3 + lookX, this.y - this.radius*0.1 + lookY, this.radius * 0.25, 0, Math.PI * 2);
+            ctx.arc(this.x + this.radius*0.3 + lookX, this.y - this.radius*0.1 + lookY, this.radius * 0.25, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(this.x - this.radius*0.3 + lookX*1.5, this.y - this.radius*0.1 + lookY*1.5, this.radius * 0.1, 0, Math.PI * 2);
+            ctx.arc(this.x + this.radius*0.3 + lookX*1.5, this.y - this.radius*0.1 + lookY*1.5, this.radius * 0.1, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        grow(amount) {
+            this.radius += amount;
+        }
+
+        // HPを減らす処理
+        damage(amount) {
+            this.hp -= amount;
+            
+            createParticles(this.x, this.y, '#ff0000');
+            
+            // HPが0以下になったらゲームオーバー（リセット）
+            if (this.hp <= 0) {
+                this.hp = 0;
+                this.updateHpUI();
+                alert("GAME OVER! Score: " + score);
+                location.reload(); // ページをリロードしてリセット
+            } else {
+                this.updateHpUI();
+            }
+        }
+
+        // HPを回復する処理
+        healFullAndUpgrade() {
+            this.maxHp += 20; // 最大HPを増やす
+            this.hp = this.maxHp; // 全回復
+            this.updateHpUI();
+            this.grow(5); // サイズも少し大きくする
+        }
+
+        // UI更新
+        updateHpUI() {
+            const pct = Math.max(0, (this.hp / this.maxHp) * 100);
+            hpBar.style.width = pct + '%';
+            hpText.innerText = `HP: ${Math.ceil(this.hp)} / ${this.maxHp}`;
+            
+            // HPが減るとバーの色が変わる演出
+            if (pct < 30) hpBar.style.backgroundColor = '#ff0000';
+            else if (pct < 60) hpBar.style.backgroundColor = '#ffff00';
+            else hpBar.style.backgroundColor = '#00ff00';
+        }
+    }
+
+    class MinionSlime {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.vx = random(-5, 5);
+            this.vy = random(-5, 5);
+            this.radius = 12;
+            this.color = '#00ccff';
+            this.life = 600; 
+            this.markedForDeletion = false;
+        }
+
+        update() {
+            if (isPaused) return;
+
+            let target = null;
+            let minStartDist = 9999;
+            for (const h of humans) {
+                const d = Math.hypot(h.x - this.x, h.y - this.y);
+                if (d < minStartDist) {
+                    minStartDist = d;
+                    target = h;
+                }
+            }
+
+            if (target) {
+                const angle = Math.atan2(target.y - this.y, target.x - this.x);
+                this.vx += Math.cos(angle) * 0.5;
+                this.vy += Math.sin(angle) * 0.5;
+            }
+
+            this.vx *= 0.95;
+            this.vy *= 0.95;
+            this.x += this.vx;
+            this.y += this.vy;
+
+            if (this.x < 0 || this.x > width) this.vx *= -1;
+            if (this.y < 0 || this.y > height) this.vy *= -1;
+            this.x = Math.max(0, Math.min(width, this.x));
+            this.y = Math.max(0, Math.min(height, this.y));
+
+            this.life--;
+            if (this.life <= 0) this.markedForDeletion = true;
+        }
+
+        draw() {
+            ctx.globalAlpha = Math.min(1.0, this.life / 60);
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(this.x - 4, this.y - 2, 3, 0, Math.PI*2);
+            ctx.arc(this.x + 4, this.y - 2, 3, 0, Math.PI*2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    class Human {
+        constructor() {
+            this.respawn();
+        }
+
+        respawn() {
+            let safe = false;
+            while(!safe) {
+                this.x = random(20, width - 20);
+                this.y = random(20, height - 20);
+                // 初期生成時にスライムがまだいない場合は回避
+                if (!slime) {
+                    safe = true;
+                } else {
+                    const dist = Math.hypot(this.x - slime.x, this.y - slime.y);
+                    if (dist > slime.radius + 150) safe = true;
+                }
+            }
+            
+            this.radius = 8;
+            this.vx = random(-1, 1);
+            this.vy = random(-1, 1);
+            this.panic = false;
+
+            this.isShooter = Math.random() < 0.2;
+            
+            if (this.isShooter) {
+                this.color = '#aa00aa';
+                this.shootCooldown = random(100, 300);
+            } else {
+                this.color = `hsl(${random(0, 360)}, 70%, 60%)`;
+            }
+        }
+
+        update() {
+            if (isPaused) return;
+
+            const distToSlime = Math.hypot(this.x - slime.x, this.y - slime.y);
+            
+            if (distToSlime < slime.radius + 120) {
+                this.panic = true;
+                const angle = Math.atan2(this.y - slime.y, this.x - slime.x);
+                this.vx += Math.cos(angle) * 0.25;
+                this.vy += Math.sin(angle) * 0.25;
+            } else {
+                this.panic = false;
+                if (Math.random() < 0.05) {
+                    this.vx += random(-0.5, 0.5);
+                    this.vy += random(-0.5, 0.5);
+                }
+            }
+
+            if (this.isShooter) {
+                this.shootCooldown--;
+                if (this.shootCooldown <= 0 && distToSlime < 400 && distToSlime > 50) {
+                    bullets.push(new Bullet(this.x, this.y, slime.x, slime.y));
+                    this.shootCooldown = 180;
+                }
+            }
+
+            const maxSpeed = this.panic ? 4 : 1.5;
+            const speed = Math.sqrt(this.vx**2 + this.vy**2);
+            if (speed > maxSpeed) {
+                this.vx = (this.vx / speed) * maxSpeed;
+                this.vy = (this.vy / speed) * maxSpeed;
+            }
+
+            this.x += this.vx;
+            this.y += this.vy;
+
+            if (this.x < 0 || this.x > width) this.vx *= -1;
+            if (this.y < 0 || this.y > height) this.vy *= -1;
+
+            this.x = Math.max(0, Math.min(width, this.x));
+            this.y = Math.max(0, Math.min(height, this.y));
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (this.isShooter) {
+                ctx.fillStyle = '#111';
+                ctx.fillRect(this.x - 10, this.y - 10, 20, 4);
+                ctx.fillRect(this.x - 6, this.y - 22, 12, 12);
+            }
+
+            if (this.panic) {
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText('!', this.x - 2, this.y - 12);
+            }
+        }
+    }
+
+    // ----------------------------------------------------
+    // ゲーム進行管理
+    // ----------------------------------------------------
+
+    const slime = new Slime();
+    const humans = [];
+    const bullets = [];
+    const minions = [];
+    let particles = [];
+    const MAX_HUMANS = 30;
+
+    for (let i = 0; i < MAX_HUMANS; i++) {
+        humans.push(new Human());
+    }
+
+    function createParticles(x, y, color) {
+        for(let i=0; i<8; i++) {
+            particles.push({
+                x: x, y: y,
+                vx: random(-3, 3), vy: random(-3, 3),
+                life: 1.0,
+                color: color
+            });
+        }
+    }
+
+    function updateParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= 0.05;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    function drawParticles() {
+        for (const p of particles) {
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    function checkLevelUp() {
+        if (score >= nextLevelThreshold) {
+            isPaused = true;
+            upgradeMenu.style.display = 'block';
+        }
+    }
+
+    window.chooseUpgrade = function(type) {
+        upgradeMenu.style.display = 'none';
+        isPaused = false;
+
+        currentLevelThresholdBase = Math.floor(currentLevelThresholdBase * 1.5);
+        nextLevelThreshold = score + currentLevelThresholdBase;
+        
+        levelEl.innerText = `NEXT LV: ${nextLevelThreshold}`;
+
+        if (type === 'heal') {
+            // HPを全回復して最大値を増やす関数を呼び出す
+            slime.healFullAndUpgrade();
+            createParticles(slime.x, slime.y, '#00ff88');
+        } else if (type === 'summon') {
+            for(let i=0; i<3; i++) {
+                minions.push(new MinionSlime(slime.x, slime.y));
+            }
+        }
+    };
+
+    function loop() {
+        requestAnimationFrame(loop);
+
+        if (isPaused) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, width, height);
+            return;
+        }
+
+        ctx.fillStyle = 'rgba(34, 34, 34, 0.4)';
+        ctx.fillRect(0, 0, width, height);
+
+        // --- 人間 ---
+        humans.forEach(h => {
+            h.update();
+            h.draw();
+
+            const dist = Math.hypot(slime.x - h.x, slime.y - h.y);
+            if (dist < slime.radius + h.radius - 2) {
+                absorbHuman(h);
+            }
+
+            minions.forEach(m => {
+                const distMinion = Math.hypot(m.x - h.x, m.y - h.y);
+                if (distMinion < m.radius + h.radius) {
+                    absorbHuman(h);
+                }
+            });
+        });
+
+        function absorbHuman(h) {
+            score++;
+            scoreEl.innerText = `ABSORBED: ${score}`;
+            slime.grow(0.5);
+            createParticles(h.x, h.y, h.color);
+            h.respawn();
+            checkLevelUp();
+        }
+
+        // --- 弾丸 ---
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            let b = bullets[i];
+            b.update();
+            b.draw();
+
+            const dist = Math.hypot(b.x - slime.x, b.y - slime.y);
+            if (dist < slime.radius) {
+                // ダメージ処理（HPが減る）
+                slime.damage(10); 
+                b.markedForDeletion = true;
+            }
+
+            if (b.markedForDeletion) bullets.splice(i, 1);
+        }
+
+        // --- 子スライム ---
+        for (let i = minions.length - 1; i >= 0; i--) {
+            let m = minions[i];
+            m.update();
+            m.draw();
+            if (m.markedForDeletion) minions.splice(i, 1);
+        }
+
+        // --- スライム ---
+        slime.update();
+        slime.draw();
+
+        updateParticles();
+        drawParticles();
+    }
+
+    loop();
+
+</script>
+</body>
+</html>
