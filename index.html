@@ -765,7 +765,9 @@
         function absorbHuman(h) {
             score++;
             scoreEl.innerText = `ABSORBED: ${score}`;
-            slime.grow(0.5);
+            // ラウンド数に合わせて成長量を減らす（＝必要な人数を増やす）
+            const growthAmount = 0.5 / Math.pow(1.8, currentRound - 1);
+            slime.grow(growthAmount);
             createParticles(h.x, h.y, h.color);
             h.respawn();
             checkLevelUp();
