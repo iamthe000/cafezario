@@ -502,6 +502,8 @@ if ('serviceWorker' in navigator) {
             if (this.isShooter) {
                 this.color = '#aa00aa';
                 this.shootCooldown = random(100, 300);
+                this.gunRecoil = 0;
+                this.pauseTimer = 0;
             } else {
                 this.color = `hsl(${random(0, 360)}, 70%, 60%)`;
             }
@@ -539,11 +541,28 @@ if ('serviceWorker' in navigator) {
             }
 
             if (this.isShooter) {
-                this.shootCooldown--;
-                if (this.shootCooldown <= 0 && distToSlime < 400 && distToSlime > 50) {
-                    bullets.push(new Bullet(this.x, this.y, slime.x, slime.y));
-                    this.shootCooldown = 180;
+                if (this.pauseTimer > 0) {
+                    this.pauseTimer--;
+                    this.vx = 0;
+                    this.vy = 0;
+                } else {
+                    this.shootCooldown--;
+                    if (this.shootCooldown <= 0 && distToSlime < 400 && distToSlime > 50) {
+                        bullets.push(new Bullet(this.x, this.y, slime.x, slime.y));
+                        this.shootCooldown = 360; // 発射間隔を広く
+                        this.gunRecoil = 12;      // 反動
+                        this.pauseTimer = 60;     // 1秒間停止 (60FPS想定)
+
+                        // 反動で少し下がる
+                        const angle = Math.atan2(slime.y - this.y, slime.x - this.x);
+                        this.vx = -Math.cos(angle) * 3;
+                        this.vy = -Math.sin(angle) * 3;
+
+                        // 煙の演出
+                        createParticles(this.x + Math.cos(angle) * 10, this.y + Math.sin(angle) * 10, '#888', 5, 1, 0.02);
+                    }
                 }
+                if (this.gunRecoil > 0) this.gunRecoil *= 0.8;
             }
 
             const maxSpeed = this.panic ? 4 : 1.5;
@@ -571,9 +590,22 @@ if ('serviceWorker' in navigator) {
             ctx.fill();
 
             if (this.isShooter) {
+                // 銃の描画
+                const angle = Math.atan2(slime.y - this.y, slime.x - this.x);
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(angle);
+                
+                // 銃本体
+                ctx.fillStyle = '#333';
+                ctx.fillRect(10 - this.gunRecoil, -2, 15, 4);
+                
+                ctx.restore();
+
+                // シルクハットの描画 (反動で少し動く)
                 ctx.fillStyle = '#111';
-                ctx.fillRect(this.x - 10, this.y - 10, 20, 4);
-                ctx.fillRect(this.x - 6, this.y - 22, 12, 12);
+                ctx.fillRect(this.x - 10, this.y - 10 - this.gunRecoil * 0.5, 20, 4);
+                ctx.fillRect(this.x - 6, this.y - 22 - this.gunRecoil * 0.5, 12, 12);
             }
 
             if (this.panic) {
@@ -599,13 +631,14 @@ if ('serviceWorker' in navigator) {
         humans.push(new Human());
     }
 
-    function createParticles(x, y, color) {
-        for(let i=0; i<8; i++) {
+    function createParticles(x, y, color, count = 8, speed = 3, decay = 0.05) {
+        for(let i=0; i<count; i++) {
             particles.push({
                 x: x, y: y,
-                vx: random(-3, 3), vy: random(-3, 3),
+                vx: random(-speed, speed), vy: random(-speed, speed),
                 life: 1.0,
-                color: color
+                color: color,
+                decay: decay
             });
         }
     }
@@ -615,7 +648,7 @@ if ('serviceWorker' in navigator) {
             const p = particles[i];
             p.x += p.vx;
             p.y += p.vy;
-            p.life -= 0.05;
+            p.life -= p.decay || 0.05;
             if (p.life <= 0) particles.splice(i, 1);
         }
     }
