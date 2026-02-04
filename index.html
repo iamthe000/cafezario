@@ -272,8 +272,7 @@ if ('serviceWorker' in navigator) {
 <div id="upgrade-menu">
     <h2>EVOLUTION CHOICE</h2>
     <p>能力を選択してください</p>
-    <button class="btn" onclick="chooseUpgrade('heal')">再生進化 (HP全回復+最大HPUP)</button>
-    <button class="btn btn-secondary" onclick="chooseUpgrade('summon')">分裂召喚 (子スライム)</button>
+    <div id="upgrade-options"></div>
 </div>
 
 <button id="graphics-toggle" onclick="toggleGraphics()">High Graphics</button>
@@ -314,6 +313,58 @@ if ('serviceWorker' in navigator) {
     // レベルシステム設定
     let nextLevelThreshold = 10;
     let currentLevelThresholdBase = 10;
+
+    const UPGRADE_POOL = [
+        {
+            id: 'speed',
+            name: '素早さ進化',
+            description: '移動速度が15%アップ',
+            effect: () => { slime.speedMultiplier *= 1.15; }
+        },
+        {
+            id: 'growth',
+            name: '巨大化加速',
+            description: '人間吸収時の成長速度が25%アップ',
+            effect: () => { slime.growthMultiplier *= 1.25; }
+        },
+        {
+            id: 'defense',
+            name: '硬化進化',
+            description: '受けるダメージを15%軽減',
+            effect: () => { 
+                slime.damageReduction = 1 - (1 - slime.damageReduction) * 0.85; 
+            }
+        },
+        {
+            id: 'regen',
+            name: '自己再生',
+            description: 'HPが少しずつ自動回復するようになる',
+            effect: () => { slime.regenAmount += 2; }
+        },
+        {
+            id: 'magnet',
+            name: '吸収領域拡大',
+            description: '人間を吸収できる範囲が広がる',
+            effect: () => { slime.absorbRangeBonus += 10; }
+        },
+        {
+            id: 'summon',
+            name: '分裂召喚',
+            description: '子スライムを3体呼び出す',
+            effect: () => {
+                for(let i=0; i<3; i++) {
+                    minions.push(new MinionSlime(slime.x, slime.y));
+                }
+            }
+        },
+        {
+            id: 'heal',
+            name: '再生進化',
+            description: 'HP全回復 + 最大HPアップ',
+            effect: () => { slime.healFullAndUpgrade(); }
+        }
+    ];
+    let currentChoices = [];
     
     // ゲーム設定
     const FRICTION = 0.98;
@@ -332,8 +383,10 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('keydown', (e) => {
         keys[e.key] = true;
         if (currentState === GameState.UPGRADE) {
-            if (e.key === '1') chooseUpgrade('heal');
-            if (e.key === '2') chooseUpgrade('summon');
+            const idx = parseInt(e.key) - 1;
+            if (idx >= 0 && idx < currentChoices.length) {
+                chooseUpgrade(currentChoices[idx].id);
+            }
         }
     });
     window.addEventListener('keyup', (e) => keys[e.key] = false);
@@ -423,24 +476,40 @@ if ('serviceWorker' in navigator) {
             this.maxHp = 100;
             this.hp = 100;
             this.updateHpUI();
+
+            // 成長属性
+            this.speedMultiplier = 1.0;
+            this.growthMultiplier = 1.0;
+            this.damageReduction = 0;
+            this.regenAmount = 0;
+            this.absorbRangeBonus = 0;
         }
 
         update() {
             if (isPaused) return;
 
+            // 自動回復
+            if (this.regenAmount > 0 && this.hp < this.maxHp) {
+                this.hp = Math.min(this.maxHp, this.hp + this.regenAmount / 60);
+                this.updateHpUI();
+            }
+
             let ax = 0;
             let ay = 0;
 
-            if (keys.ArrowUp || keys.w) ay -= ACCELERATION;
-            if (keys.ArrowDown || keys.s) ay += ACCELERATION;
-            if (keys.ArrowLeft || keys.a) ax -= ACCELERATION;
-            if (keys.ArrowRight || keys.d) ax += ACCELERATION;
+            const currentAcc = ACCELERATION * this.speedMultiplier;
+            const currentMaxSpeed = MAX_SPEED * this.speedMultiplier;
+
+            if (keys.ArrowUp || keys.w) ay -= currentAcc;
+            if (keys.ArrowDown || keys.s) ay += currentAcc;
+            if (keys.ArrowLeft || keys.a) ax -= currentAcc;
+            if (keys.ArrowRight || keys.d) ax += currentAcc;
 
             if (touchInput.active) {
                 const angle = Math.atan2(touchInput.y, touchInput.x);
                 const dist = Math.min(Math.hypot(touchInput.x, touchInput.y), 100) / 100;
-                ax += Math.cos(angle) * ACCELERATION * dist * 1.5;
-                ay += Math.sin(angle) * ACCELERATION * dist * 1.5;
+                ax += Math.cos(angle) * currentAcc * dist * 1.5;
+                ay += Math.sin(angle) * currentAcc * dist * 1.5;
             }
 
             if (ax !== 0 || ay !== 0) {
@@ -454,9 +523,9 @@ if ('serviceWorker' in navigator) {
             this.vy *= FRICTION;
 
             const speed = Math.sqrt(this.vx**2 + this.vy**2);
-            if (speed > MAX_SPEED) {
-                this.vx = (this.vx / speed) * MAX_SPEED;
-                this.vy = (this.vy / speed) * MAX_SPEED;
+            if (speed > currentMaxSpeed) {
+                this.vx = (this.vx / speed) * currentMaxSpeed;
+                this.vy = (this.vy / speed) * currentMaxSpeed;
             }
 
             this.x += this.vx;
@@ -509,7 +578,8 @@ if ('serviceWorker' in navigator) {
 
         // HPを減らす処理
         damage(amount) {
-            this.hp -= amount;
+            const reducedAmount = amount * (1 - this.damageReduction);
+            this.hp -= reducedAmount;
             
             createParticles(this.x, this.y, '#ff0000');
             
@@ -862,11 +932,30 @@ if ('serviceWorker' in navigator) {
         if (score >= nextLevelThreshold) {
             isPaused = true;
             currentState = GameState.UPGRADE;
-            upgradeMenu.style.display = 'block';
+            showUpgradeMenu();
         }
     }
 
-    window.chooseUpgrade = function(type) {
+    function showUpgradeMenu() {
+        upgradeMenu.style.display = 'block';
+        const container = document.getElementById('upgrade-options');
+        if (!container) return;
+        container.innerHTML = '';
+        
+        // シャッフルして3つ選ぶ
+        const shuffled = [...UPGRADE_POOL].sort(() => 0.5 - Math.random());
+        currentChoices = shuffled.slice(0, 3);
+        
+        currentChoices.forEach((upgrade, index) => {
+            const btn = document.createElement('button');
+            btn.className = 'btn' + (index % 2 === 1 ? ' btn-secondary' : '');
+            btn.innerHTML = `[${index + 1}] ${upgrade.name}<br><small style="font-size: 12px; opacity: 0.8;">${upgrade.description}</small>`;
+            btn.onclick = () => chooseUpgrade(upgrade.id);
+            container.appendChild(btn);
+        });
+    }
+
+    window.chooseUpgrade = function(upgradeId) {
         upgradeMenu.style.display = 'none';
         isPaused = false;
         currentState = GameState.PLAYING;
@@ -876,14 +965,10 @@ if ('serviceWorker' in navigator) {
         
         levelEl.innerText = `NEXT: ${nextLevelThreshold}`;
 
-        if (type === 'heal') {
-            // HPを全回復して最大値を増やす関数を呼び出す
-            slime.healFullAndUpgrade();
+        const upgrade = UPGRADE_POOL.find(u => u.id === upgradeId);
+        if (upgrade) {
+            upgrade.effect();
             createParticles(slime.x, slime.y, '#00ff88');
-        } else if (type === 'summon') {
-            for(let i=0; i<3; i++) {
-                minions.push(new MinionSlime(slime.x, slime.y));
-            }
         }
     };
 
@@ -1027,7 +1112,7 @@ if ('serviceWorker' in navigator) {
             h.draw();
 
             const dist = Math.hypot(slime.x - h.x, slime.y - h.y);
-            if (dist < slime.radius + h.radius - 2) {
+            if (dist < slime.radius + h.radius + slime.absorbRangeBonus - 2) {
                 absorbHuman(h);
             }
 
@@ -1043,7 +1128,7 @@ if ('serviceWorker' in navigator) {
             score++;
             scoreEl.innerText = `SCORE: ${score}`;
             // ラウンド数に合わせて成長量を減らす（＝必要な人数を増やす）
-            const growthAmount = 0.5 / Math.pow(1.8, currentRound - 1);
+            const growthAmount = (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier;
             slime.grow(growthAmount);
             createParticles(h.x, h.y, h.color);
             h.die();
