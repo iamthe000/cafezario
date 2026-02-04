@@ -356,12 +356,6 @@ if ('serviceWorker' in navigator) {
                     minions.push(new MinionSlime(slime.x, slime.y));
                 }
             }
-        },
-        {
-            id: 'heal',
-            name: '再生進化',
-            description: 'HP全回復 + 最大HPアップ',
-            effect: () => { slime.healFullAndUpgrade(); }
         }
     ];
     let currentChoices = [];
@@ -383,9 +377,13 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('keydown', (e) => {
         keys[e.key] = true;
         if (currentState === GameState.UPGRADE) {
-            const idx = parseInt(e.key) - 1;
-            if (idx >= 0 && idx < currentChoices.length) {
-                chooseUpgrade(currentChoices[idx].id);
+            if (e.key === '0') {
+                useRegenUpgrade();
+            } else {
+                const idx = parseInt(e.key) - 1;
+                if (idx >= 0 && idx < currentChoices.length) {
+                    chooseUpgrade(currentChoices[idx].id);
+                }
             }
         }
     });
@@ -936,6 +934,16 @@ if ('serviceWorker' in navigator) {
         }
     }
 
+    function useRegenUpgrade() {
+        const cost = 50;
+        if (score >= cost) {
+            score -= cost;
+            scoreEl.innerText = `SCORE: ${score}`;
+            slime.healFullAndUpgrade();
+            finishUpgrade();
+        }
+    }
+
     function showUpgradeMenu() {
         upgradeMenu.style.display = 'block';
         const container = document.getElementById('upgrade-options');
@@ -953,9 +961,27 @@ if ('serviceWorker' in navigator) {
             btn.onclick = () => chooseUpgrade(upgrade.id);
             container.appendChild(btn);
         });
+
+        // 特別な選択肢：再生進化
+        const regenCost = 50;
+        const regenBtn = document.createElement('button');
+        regenBtn.className = 'btn';
+        regenBtn.style.marginTop = '20px';
+        regenBtn.style.borderColor = '#ff0055';
+        regenBtn.style.color = '#ff0055';
+        
+        if (score < regenCost) {
+            regenBtn.style.opacity = '0.5';
+            regenBtn.style.cursor = 'not-allowed';
+            regenBtn.innerHTML = `[0] 再生進化 (必要SCORE: ${regenCost})<br><small style="font-size: 11px;">スコアが足りません</small>`;
+        } else {
+            regenBtn.innerHTML = `[0] 再生進化 (消費SCORE: ${regenCost})<br><small style="font-size: 11px;">HP全回復 + 最大HPアップ</small>`;
+            regenBtn.onclick = () => useRegenUpgrade();
+        }
+        container.appendChild(regenBtn);
     }
 
-    window.chooseUpgrade = function(upgradeId) {
+    function finishUpgrade() {
         upgradeMenu.style.display = 'none';
         isPaused = false;
         currentState = GameState.PLAYING;
@@ -964,12 +990,15 @@ if ('serviceWorker' in navigator) {
         nextLevelThreshold = score + currentLevelThresholdBase;
         
         levelEl.innerText = `NEXT: ${nextLevelThreshold}`;
+        createParticles(slime.x, slime.y, '#00ff88');
+    }
 
+    window.chooseUpgrade = function(upgradeId) {
         const upgrade = UPGRADE_POOL.find(u => u.id === upgradeId);
         if (upgrade) {
             upgrade.effect();
-            createParticles(slime.x, slime.y, '#00ff88');
         }
+        finishUpgrade();
     };
 
     function completeTransition() {
