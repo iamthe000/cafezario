@@ -1329,13 +1329,17 @@ if ('serviceWorker' in navigator) {
         
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         // Canvas context filter is buggy on mobile, so we use CSS filter on the canvas element instead
+        // Added -webkit-filter for iOS Safari compatibility
         if (isSpecialAttacking && !isLowGraphics) {
-            if (canvas.style.filter === 'none' || canvas.style.filter === '') {
-                canvas.style.filter = 'grayscale(100%) contrast(200%) brightness(1.2)';
+            if (!canvas.style.filter.includes('grayscale')) {
+                const filterValue = 'grayscale(100%) contrast(200%) brightness(1.2)';
+                canvas.style.webkitFilter = filterValue;
+                canvas.style.filter = filterValue;
             }
         } else {
-            if (canvas.style.filter !== 'none' && canvas.style.filter !== '') {
-                canvas.style.filter = 'none';
+            if (canvas.style.filter !== '' && canvas.style.filter !== 'none') {
+                canvas.style.webkitFilter = '';
+                canvas.style.filter = '';
             }
         }
         ctx.filter = 'none';
