@@ -490,16 +490,26 @@ if ('serviceWorker' in navigator) {
     });
 
     window.toggleGraphics = function() {
+        const btn = document.getElementById('graphics-toggle');
         if (currentState === GameState.START) {
             graphicsClickCount++;
             if (graphicsClickCount === 10) {
                 isCheatInvincible = true;
+                btn.style.backgroundColor = '#ff0055';
+                btn.style.color = '#fff';
+                btn.innerText = 'CHEAT: INVINCIBLE';
                 console.log("Cheat Activated: Invincibility ON");
+                setTimeout(() => {
+                    btn.style.backgroundColor = '';
+                    btn.style.color = '';
+                    btn.innerText = isLowGraphics ? 'Graphics: Low' : 'Graphics: High';
+                }, 2000);
             }
         }
         isLowGraphics = !isLowGraphics;
-        const btn = document.getElementById('graphics-toggle');
-        btn.innerText = isLowGraphics ? 'Graphics: Low' : 'Graphics: High';
+        if (!isCheatInvincible || btn.innerText !== 'CHEAT: INVINCIBLE') {
+            btn.innerText = isLowGraphics ? 'Graphics: Low' : 'Graphics: High';
+        }
         if (isLowGraphics) {
             particles = [];
         }
@@ -1318,11 +1328,17 @@ if ('serviceWorker' in navigator) {
         lastTime = timestamp;
         
         ctx.setTransform(1, 0, 0, 1, 0, 0);
+        // Canvas context filter is buggy on mobile, so we use CSS filter on the canvas element instead
         if (isSpecialAttacking && !isLowGraphics) {
-            ctx.filter = 'grayscale(100%) contrast(200%) brightness(1.2)';
+            if (canvas.style.filter === 'none' || canvas.style.filter === '') {
+                canvas.style.filter = 'grayscale(100%) contrast(200%) brightness(1.2)';
+            }
         } else {
-            ctx.filter = 'none';
+            if (canvas.style.filter !== 'none' && canvas.style.filter !== '') {
+                canvas.style.filter = 'none';
+            }
         }
+        ctx.filter = 'none';
 
         if (currentState === GameState.START) {
             ctx.fillStyle = '#222';
