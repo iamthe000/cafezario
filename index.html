@@ -1349,7 +1349,7 @@ if ('serviceWorker' in navigator) {
                 slime.updateSpecialUI();
             }
         }
-        const growthFactor = h.isTank ? 4 : 1;
+        const growthFactor = h.isTank ? 20 : 1;
         const growthAmount = (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier * growthFactor;
         slime.grow(growthAmount);
         createParticles(h.x, h.y, h.color);
