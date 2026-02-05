@@ -322,7 +322,7 @@ if ('serviceWorker' in navigator) {
     <div id="upgrade-options"></div>
 </div>
 
-<button id="graphics-toggle" onclick="toggleGraphics()">High Graphics</button>
+<button id="graphics-toggle" onclick="toggleGraphics()">Graphics: High</button>
 <button id="special-button" style="display:none; position:fixed; bottom:20px; right:20px; width:80px; height:80px; border-radius:50%; background:rgba(255,255,0,0.6); border:4px solid #fff; color:#000; font-weight:bold; font-family:inherit; z-index:100; cursor:pointer; box-shadow:0 0 15px rgba(255,255,0,0.8); outline:none; -webkit-tap-highlight-color:transparent;">SPECIAL</button>
 
 <canvas id="gameCanvas"></canvas>
@@ -490,10 +490,11 @@ if ('serviceWorker' in navigator) {
     window.toggleGraphics = function() {
         isLowGraphics = !isLowGraphics;
         const btn = document.getElementById('graphics-toggle');
-        btn.innerText = isLowGraphics ? 'Low Graphics' : 'High Graphics';
+        btn.innerText = isLowGraphics ? 'Graphics: Low' : 'Graphics: High';
         if (isLowGraphics) {
             particles = [];
         }
+        btn.blur();
     };
 
     const random = (min, max) => Math.random() * (max - min) + min;
@@ -1299,8 +1300,12 @@ if ('serviceWorker' in navigator) {
         }
     }
 
-    function loop() {
+    let lastTime = 0;
+    function loop(timestamp) {
         requestAnimationFrame(loop);
+        if (!lastTime) lastTime = timestamp;
+        const dt = Math.min(5, (timestamp - lastTime) / 16.666 || 1);
+        lastTime = timestamp;
         
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.filter = 'none';
@@ -1381,12 +1386,14 @@ if ('serviceWorker' in navigator) {
 
         if (isSpecialAttacking) {
             ctx.save();
-            // 演出中は白黒かつ高コントラストにする
-            ctx.filter = 'grayscale(100%) contrast(200%) brightness(1.2)';
+            if (!isLowGraphics) {
+                // 演出中は白黒かつ高コントラストにする
+                ctx.filter = 'grayscale(100%) contrast(200%) brightness(1.2)';
+            }
             
             const shake = (120 - specialAttackTimer) / 5;
             ctx.translate(Math.random() * shake - shake/2, Math.random() * shake - shake/2);
-            specialAttackTimer--;
+            specialAttackTimer -= dt;
         }
 
         // --- エンティティ描画 ---
@@ -1438,9 +1445,9 @@ if ('serviceWorker' in navigator) {
             // ビーム演出
             ctx.save();
             ctx.translate(slime.x, slime.y);
-            const beamCount = 32;
+            const beamCount = isLowGraphics ? 12 : 32;
             const angleStep = (Math.PI * 2) / beamCount;
-            const timeFactor = specialAttackTimer / 120; // 1.0 -> 0.0
+            const timeFactor = Math.max(0, specialAttackTimer / 120); // 1.0 -> 0.0
             const progress = 1 - timeFactor; // 0.0 -> 1.0
             
             for(let i=0; i<beamCount; i++) {
@@ -1474,7 +1481,7 @@ if ('serviceWorker' in navigator) {
             ctx.restore();
 
             // 画面全体へのノイズ的な演出
-            if (Math.random() < 0.5) {
+            if (!isLowGraphics && Math.random() < 0.5) {
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
                 ctx.fillRect(0, Math.random() * height, width, Math.random() * 10 + 2);
             }
