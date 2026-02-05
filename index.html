@@ -503,14 +503,16 @@ if ('serviceWorker' in navigator) {
     // ----------------------------------------------------
 
     class Bullet {
-        constructor(x, y, targetX, targetY) {
+        constructor(x, y, targetX, targetY, damage = 10, radius = 4, color = '#ff3333') {
             this.x = x;
             this.y = y;
             const angle = Math.atan2(targetY - y, targetX - x);
             const speed = 6;
             this.vx = Math.cos(angle) * speed;
             this.vy = Math.sin(angle) * speed;
-            this.radius = 4;
+            this.radius = radius;
+            this.damage = damage;
+            this.color = color;
             this.markedForDeletion = false;
         }
 
@@ -523,7 +525,7 @@ if ('serviceWorker' in navigator) {
         }
 
         draw() {
-            ctx.fillStyle = '#ff3333';
+            ctx.fillStyle = this.color;
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
             ctx.fill();
@@ -556,6 +558,8 @@ if ('serviceWorker' in navigator) {
             this.specialGauge = 0;
             this.maxSpecialGauge = 100;
             this.updateSpecialUI();
+
+            this.isInvincible = false;
         }
 
         update() {
@@ -677,6 +681,7 @@ if ('serviceWorker' in navigator) {
 
         // HPを減らす処理
         damage(amount) {
+            if (this.isInvincible) return;
             const reducedAmount = amount * (1 - this.damageReduction);
             this.hp -= reducedAmount;
             
@@ -786,6 +791,114 @@ if ('serviceWorker' in navigator) {
             ctx.arc(this.x + 4, this.y - 2, 3, 0, Math.PI*2);
             ctx.fill();
             ctx.globalAlpha = 1.0;
+        }
+    }
+
+    class Tank {
+        constructor() {
+            this.active = true;
+            this.respawnTimer = 0;
+            this.isTank = true;
+            this.respawn();
+        }
+
+        respawn() {
+            this.active = true;
+            this.respawnTimer = 0;
+            let safe = false;
+            let attempts = 0;
+            const threshold = Math.min(slime ? slime.radius + 200 : 200, Math.min(width, height) * 0.4);
+            while(!safe && attempts < 100) {
+                attempts++;
+                this.x = random(40, width - 40);
+                this.y = random(40, height - 40);
+                if (!slime) {
+                    safe = true;
+                } else {
+                    const dist = Math.hypot(this.x - slime.x, this.y - slime.y);
+                    if (dist > threshold) safe = true;
+                }
+            }
+            
+            this.radius = 24; 
+            this.vx = 0;
+            this.vy = 0;
+            this.angle = random(0, Math.PI * 2);
+            this.turretAngle = 0;
+            this.shootCooldown = random(60, 180);
+            this.color = '#556644';
+        }
+
+        die() {
+            this.active = false;
+            this.respawnTimer = random(300, 600);
+        }
+
+        update() {
+            if (isPaused) return;
+
+            if (!this.active) {
+                this.respawnTimer--;
+                if (this.respawnTimer <= 0) {
+                    this.respawn();
+                }
+                return;
+            }
+
+            const distToSlime = Math.hypot(this.x - slime.x, this.y - slime.y);
+            this.turretAngle = Math.atan2(slime.y - this.y, slime.x - this.x);
+
+            if (distToSlime > 400) {
+                this.vx += Math.cos(this.turretAngle) * 0.05;
+                this.vy += Math.sin(this.turretAngle) * 0.05;
+            } else {
+                if (Math.random() < 0.05) {
+                    this.vx += random(-0.2, 0.2);
+                    this.vy += random(-0.2, 0.2);
+                }
+            }
+
+            this.vx *= 0.98;
+            this.vy *= 0.98;
+            this.x += this.vx;
+            this.y += this.vy;
+
+            this.shootCooldown--;
+            if (this.shootCooldown <= 0 && distToSlime < 600) {
+                bullets.push(new Bullet(this.x, this.y, slime.x, slime.y, 20, 6, '#ffaa00'));
+                this.shootCooldown = 120;
+                createParticles(this.x + Math.cos(this.turretAngle) * 20, this.y + Math.sin(this.turretAngle) * 20, '#888', 5, 1, 0.02);
+            }
+
+            if (this.x < this.radius || this.x > width - this.radius) this.vx *= -1;
+            if (this.y < this.radius || this.y > height - this.radius) this.vy *= -1;
+            this.x = Math.max(this.radius, Math.min(width - this.radius, this.x));
+            this.y = Math.max(this.radius, Math.min(height - this.radius, this.y));
+        }
+
+        draw() {
+            if (!this.active) return;
+            
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(Math.atan2(this.vy, this.vx) || this.angle);
+            
+            ctx.fillStyle = '#445533';
+            ctx.fillRect(-20, -15, 40, 30);
+            
+            ctx.fillStyle = '#222';
+            ctx.fillRect(-22, -18, 44, 7);
+            ctx.fillRect(-22, 11, 44, 7);
+            ctx.restore();
+
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.turretAngle);
+            ctx.fillStyle = '#556644';
+            ctx.fillRect(-12, -12, 24, 24);
+            ctx.fillStyle = '#333';
+            ctx.fillRect(12, -4, 20, 8);
+            ctx.restore();
         }
     }
 
@@ -1137,7 +1250,12 @@ if ('serviceWorker' in navigator) {
         const high = (1 + scale) / 2;
 
         for (let i = 0; i < spawnCount; i++) {
-            const h = new Human();
+            let h;
+            if (currentRound > 7 && Math.random() < 0.2) {
+                h = new Tank();
+            } else {
+                h = new Human();
+            }
             let safe = false;
             let attempts = 0;
             const threshold = Math.min(slime.radius + 100, Math.min(width, height) * 0.3);
@@ -1159,18 +1277,20 @@ if ('serviceWorker' in navigator) {
     }
 
     function absorbHuman(h, skipUIUpdate = false) {
-        score++;
+        score += h.isTank ? 10 : 1;
         if (!skipUIUpdate) {
             scoreEl.innerText = `SCORE: ${score}`;
         }
-        if (h.isShooter) {
-            const gaugeIncrement = Math.max(1, 10 / Math.pow(1.8, currentRound - 1));
+        if (h.isShooter || h.isTank) {
+            const multiplier = h.isTank ? 3 : 1;
+            const gaugeIncrement = Math.max(1, 10 / Math.pow(1.8, currentRound - 1)) * multiplier;
             slime.specialGauge = Math.min(slime.maxSpecialGauge, slime.specialGauge + gaugeIncrement);
             if (!skipUIUpdate) {
                 slime.updateSpecialUI();
             }
         }
-        const growthAmount = (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier;
+        const growthFactor = h.isTank ? 4 : 1;
+        const growthAmount = (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier * growthFactor;
         slime.grow(growthAmount);
         createParticles(h.x, h.y, h.color);
         h.die();
@@ -1295,7 +1415,7 @@ if ('serviceWorker' in navigator) {
             b.draw();
             const dist = Math.hypot(b.x - slime.x, b.y - slime.y);
             if (dist < slime.radius) {
-                slime.damage(10); 
+                slime.damage(b.damage); 
                 b.markedForDeletion = true;
             }
             if (b.markedForDeletion) bullets.splice(i, 1);
@@ -1394,6 +1514,14 @@ if ('serviceWorker' in navigator) {
     }
 
     loop();
+
+    // デバッグ用チートコマンド
+    window.cheatInvincible = function() {
+        if (!slime) return "Game not started";
+        slime.isInvincible = !slime.isInvincible;
+        console.log("Invincibility: " + (slime.isInvincible ? "ON" : "OFF"));
+        return slime.isInvincible;
+    };
 
 </script>
 </body>
