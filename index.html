@@ -939,6 +939,21 @@ if ('serviceWorker' in navigator) {
                 attempts++;
                 this.x = random(20, width - 20);
                 this.y = random(20, height - 20);
+
+                // 戦車の近くには出現しないようにする
+                let tooCloseToTank = false;
+                if (currentRound >= 8) {
+                    for (const other of humans) {
+                        if (other.isTank && other.active) {
+                            if (Math.hypot(this.x - other.x, this.y - other.y) < 150) {
+                                tooCloseToTank = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (tooCloseToTank) continue;
+
                 // 初期生成時にスライムがまだいない場合は回避
                 if (!slime) {
                     safe = true;
@@ -993,6 +1008,20 @@ if ('serviceWorker' in navigator) {
                 if (Math.random() < 0.05) {
                     this.vx += random(-0.5, 0.5);
                     this.vy += random(-0.5, 0.5);
+                }
+            }
+
+            // 戦車回避ロジック
+            if (currentRound >= 8) {
+                for (const other of humans) {
+                    if (other.isTank && other.active) {
+                        const distToTank = Math.hypot(this.x - other.x, this.y - other.y);
+                        if (distToTank < 150) {
+                            const angle = Math.atan2(this.y - other.y, this.x - other.x);
+                            this.vx += Math.cos(angle) * 0.5;
+                            this.vy += Math.sin(angle) * 0.5;
+                        }
+                    }
                 }
             }
 
@@ -1266,7 +1295,17 @@ if ('serviceWorker' in navigator) {
 
         // 新しく広がったエリア（外周）に人間を補充
         // 拡大率に合わせて補充する人数も増やす
-        const spawnCount = Math.floor(MAX_HUMANS * Math.pow(1.5, currentRound - 2));
+        let spawnCount;
+        if (currentRound < 8) {
+            spawnCount = Math.floor(MAX_HUMANS * Math.pow(1.5, currentRound - 2));
+        } else {
+            if (currentRound === 8) {
+                // 8ラウンド開始時に人間の数を大幅に減らす
+                humans = humans.filter(h => h.isTank || Math.random() < 0.1);
+            }
+            // 8ラウンド以降は20人から開始し、ラウンド毎に10人ずつ増やす
+            spawnCount = 20 + (currentRound - 8) * 10;
+        }
         const low = (1 - scale) / 2;
         const high = (1 + scale) / 2;
 
