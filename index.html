@@ -231,6 +231,48 @@ if ('serviceWorker' in navigator) {
             background: #00ff88;
             color: #000;
         }
+
+        /* スペシャルゲージUI */
+        #special-container {
+            width: 150px;
+            max-width: 90vw;
+            height: 12px;
+            background-color: #333;
+            border: 1px solid #aaa;
+            position: relative;
+            margin: 8px 0 4px 0;
+            overflow: hidden;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+        #special-bar {
+            width: 0%;
+            height: 100%;
+            background-color: #ffff00;
+            transition: width 0.3s;
+        }
+        #special-text {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            text-align: center;
+            line-height: 12px;
+            font-size: 9px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 1px 1px 1px black;
+        }
+        .special-ready {
+            border-color: #fff !important;
+            box-shadow: 0 0 10px #ffff00 !important;
+            animation: pulse-special 1s infinite;
+        }
+        @keyframes pulse-special {
+            0% { opacity: 0.8; }
+            50% { opacity: 1; }
+            100% { opacity: 0.8; }
+        }
     </style>
 </head>
 <body>
@@ -266,6 +308,11 @@ if ('serviceWorker' in navigator) {
         <div id="hp-text">HP: 100 / 100</div>
     </div>
 
+    <div id="special-container">
+        <div id="special-bar"></div>
+        <div id="special-text">SPECIAL: 0%</div>
+    </div>
+
     <div id="level-display">NEXT: 10</div>
 </div>
 
@@ -276,6 +323,7 @@ if ('serviceWorker' in navigator) {
 </div>
 
 <button id="graphics-toggle" onclick="toggleGraphics()">High Graphics</button>
+<button id="special-button" style="display:none; position:fixed; bottom:20px; right:20px; width:80px; height:80px; border-radius:50%; background:rgba(255,255,0,0.6); border:4px solid #fff; color:#000; font-weight:bold; font-family:inherit; z-index:100; cursor:pointer; box-shadow:0 0 15px rgba(255,255,0,0.8); outline:none; -webkit-tap-highlight-color:transparent;">SPECIAL</button>
 
 <canvas id="gameCanvas"></canvas>
 
@@ -290,6 +338,12 @@ if ('serviceWorker' in navigator) {
     // HP UI要素
     const hpBar = document.getElementById('hp-bar');
     const hpText = document.getElementById('hp-text');
+    
+    // スペシャルUI要素
+    const specialBar = document.getElementById('special-bar');
+    const specialText = document.getElementById('special-text');
+    const specialContainer = document.getElementById('special-container');
+    const specialButton = document.getElementById('special-button');
 
     const GameState = {
         START: 'START',
@@ -301,8 +355,11 @@ if ('serviceWorker' in navigator) {
 
     let width, height;
     let score = 0;
+    let flashAlpha = 0;
     let isPaused = false;
     let isLowGraphics = false;
+    let isSpecialAttacking = false;
+    let specialAttackTimer = 0;
 
     // ラウンド・遷移管理
     let currentRound = 1;
@@ -376,6 +433,14 @@ if ('serviceWorker' in navigator) {
 
     window.addEventListener('keydown', (e) => {
         keys[e.key] = true;
+        
+        // スペシャル攻撃発動 (Space, X)
+        if ((e.key === ' ' || e.key === 'x') && currentState === GameState.PLAYING) {
+            if (slime && !isSpecialAttacking) {
+                slime.activateSpecial();
+            }
+        }
+
         if (currentState === GameState.UPGRADE) {
             if (e.key === '0') {
                 useRegenUpgrade();
@@ -416,6 +481,11 @@ if ('serviceWorker' in navigator) {
         height = canvas.height = window.innerHeight;
     }
     resize();
+
+    specialButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (slime) slime.activateSpecial();
+    });
 
     window.toggleGraphics = function() {
         isLowGraphics = !isLowGraphics;
@@ -481,6 +551,11 @@ if ('serviceWorker' in navigator) {
             this.damageReduction = 0;
             this.regenAmount = 0;
             this.absorbRangeBonus = 0;
+
+            // スペシャルゲージ
+            this.specialGauge = 0;
+            this.maxSpecialGauge = 100;
+            this.updateSpecialUI();
         }
 
         update() {
@@ -535,6 +610,32 @@ if ('serviceWorker' in navigator) {
             if (this.y > height - this.radius) { this.y = height - this.radius; this.vy *= -0.8; }
 
             this.wobblePhase += 0.1 + (speed * 0.05);
+        }
+
+        activateSpecial() {
+            if (this.specialGauge >= this.maxSpecialGauge && !isSpecialAttacking && currentState === GameState.PLAYING) {
+                isSpecialAttacking = true;
+                specialAttackTimer = 120; // 約2秒間の演出
+                this.vx = 0;
+                this.vy = 0;
+                this.updateSpecialUI();
+            }
+        }
+
+        updateSpecialUI() {
+            const pct = Math.min(100, (this.specialGauge / this.maxSpecialGauge) * 100);
+            specialBar.style.width = pct + '%';
+            specialText.innerText = `SPECIAL: ${Math.floor(pct)}%`;
+            
+            if (pct >= 100 && !isSpecialAttacking) {
+                specialContainer.classList.add('special-ready');
+                specialBar.style.backgroundColor = '#ffffff';
+                if (specialButton) specialButton.style.display = 'block';
+            } else {
+                specialContainer.classList.remove('special-ready');
+                specialBar.style.backgroundColor = '#ffff00';
+                if (specialButton) specialButton.style.display = 'none';
+            }
         }
 
         draw() {
@@ -1057,8 +1158,32 @@ if ('serviceWorker' in navigator) {
         isTransitioning = false;
     }
 
+    function absorbHuman(h, skipUIUpdate = false) {
+        score++;
+        if (!skipUIUpdate) {
+            scoreEl.innerText = `SCORE: ${score}`;
+        }
+        if (h.isShooter) {
+            const gaugeIncrement = Math.max(1, 10 / Math.pow(1.8, currentRound - 1));
+            slime.specialGauge = Math.min(slime.maxSpecialGauge, slime.specialGauge + gaugeIncrement);
+            if (!skipUIUpdate) {
+                slime.updateSpecialUI();
+            }
+        }
+        const growthAmount = (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier;
+        slime.grow(growthAmount);
+        createParticles(h.x, h.y, h.color);
+        h.die();
+        if (!skipUIUpdate) {
+            checkLevelUp();
+        }
+    }
+
     function loop() {
         requestAnimationFrame(loop);
+        
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.filter = 'none';
 
         if (currentState === GameState.START) {
             ctx.fillStyle = '#222';
@@ -1134,66 +1259,138 @@ if ('serviceWorker' in navigator) {
         ctx.fillRect(0, 0, width, height);
         ctx.globalAlpha = 1.0;
 
-        // --- 人間 ---
-        humans.forEach(h => {
-            h.update();
-            if (!h.active) return;
-            h.draw();
-
-            const dist = Math.hypot(slime.x - h.x, slime.y - h.y);
-            if (dist < slime.radius + h.radius + slime.absorbRangeBonus - 2) {
-                absorbHuman(h);
-            }
-
-            minions.forEach(m => {
-                const distMinion = Math.hypot(m.x - h.x, m.y - h.y);
-                if (distMinion < m.radius + h.radius) {
-                    absorbHuman(h);
-                }
-            });
-        });
-
-        function absorbHuman(h) {
-            score++;
-            scoreEl.innerText = `SCORE: ${score}`;
-            // ラウンド数に合わせて成長量を減らす（＝必要な人数を増やす）
-            const growthAmount = (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier;
-            slime.grow(growthAmount);
-            createParticles(h.x, h.y, h.color);
-            h.die();
-            checkLevelUp();
+        if (isSpecialAttacking) {
+            ctx.save();
+            // 演出中は白黒かつ高コントラストにする
+            ctx.filter = 'grayscale(100%) contrast(200%) brightness(1.2)';
+            
+            const shake = (120 - specialAttackTimer) / 5;
+            ctx.translate(Math.random() * shake - shake/2, Math.random() * shake - shake/2);
+            specialAttackTimer--;
         }
 
-        // --- 弾丸 ---
+        // --- エンティティ描画 ---
+        humans.forEach(h => {
+            if (!isSpecialAttacking) h.update();
+            if (h.active) {
+                h.draw();
+                if (!isSpecialAttacking) {
+                    const dist = Math.hypot(slime.x - h.x, slime.y - h.y);
+                    if (dist < slime.radius + h.radius + slime.absorbRangeBonus - 2) {
+                        absorbHuman(h);
+                    }
+                    minions.forEach(m => {
+                        const distMinion = Math.hypot(m.x - h.x, m.y - h.y);
+                        if (distMinion < m.radius + h.radius) {
+                            absorbHuman(h);
+                        }
+                    });
+                }
+            }
+        });
+
         for (let i = bullets.length - 1; i >= 0; i--) {
             let b = bullets[i];
-            b.update();
+            if (!isSpecialAttacking) b.update();
             b.draw();
-
             const dist = Math.hypot(b.x - slime.x, b.y - slime.y);
             if (dist < slime.radius) {
-                // ダメージ処理（HPが減る）
                 slime.damage(10); 
                 b.markedForDeletion = true;
             }
-
             if (b.markedForDeletion) bullets.splice(i, 1);
         }
 
-        // --- 子スライム ---
         for (let i = minions.length - 1; i >= 0; i--) {
             let m = minions[i];
-            m.update();
+            if (!isSpecialAttacking) m.update();
             m.draw();
             if (m.markedForDeletion) minions.splice(i, 1);
         }
 
-        // --- スライム ---
-        slime.update();
+        if (!isSpecialAttacking) slime.update();
         slime.draw();
 
-        updateParticles();
+        if (!isSpecialAttacking) updateParticles();
         drawParticles();
+
+        if (isSpecialAttacking) {
+            // ビーム演出
+            ctx.save();
+            ctx.translate(slime.x, slime.y);
+            const beamCount = 32;
+            const angleStep = (Math.PI * 2) / beamCount;
+            const timeFactor = specialAttackTimer / 120; // 1.0 -> 0.0
+            const progress = 1 - timeFactor; // 0.0 -> 1.0
+            
+            for(let i=0; i<beamCount; i++) {
+                const angle = i * angleStep + progress * 8;
+                const length = Math.max(width, height) * 2;
+                
+                // 放射状の線
+                ctx.strokeStyle = i % 2 === 0 ? '#fff' : '#888';
+                ctx.lineWidth = 2 + progress * 20;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(Math.cos(angle) * length, Math.sin(angle) * length);
+                ctx.stroke();
+
+                // 追加の細い光
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(Math.cos(angle + 0.1) * length, Math.sin(angle + 0.1) * length);
+                ctx.stroke();
+            }
+
+            // 中心からの衝撃波
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 5;
+            ctx.beginPath();
+            ctx.arc(0, 0, progress * Math.max(width, height), 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.restore();
+
+            // 画面全体へのノイズ的な演出
+            if (Math.random() < 0.5) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.fillRect(0, Math.random() * height, width, Math.random() * 10 + 2);
+            }
+
+            // 最初のsaveに対応するrestore (ctx.filterの解除)
+            ctx.restore();
+
+            if (specialAttackTimer <= 0) {
+                // 明転
+                flashAlpha = 1.0;
+                
+                // 全吸収
+                humans.forEach(h => {
+                    if (h.active) {
+                        absorbHuman(h, true);
+                    }
+                });
+                
+                // リセット
+                slime.specialGauge = 0;
+                
+                // まとめてUI更新
+                scoreEl.innerText = `SCORE: ${score}`;
+                slime.updateSpecialUI();
+                checkLevelUp();
+                
+                isSpecialAttacking = false;
+            }
+        }
+
+        // --- 明転エフェクト ---
+        if (flashAlpha > 0) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
+            ctx.fillRect(0, 0, width, height);
+            flashAlpha -= 0.05;
+        }
     }
 
     loop();
