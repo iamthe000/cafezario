@@ -290,10 +290,11 @@ if ('serviceWorker' in navigator) {
 </div>
 
 <div id="game-over-screen" class="overlay-screen">
-    <h1>GAME OVER</h1>
+    <h1 id="game-over-title">GAME OVER</h1>
     <p>吸収した人間の数:</p>
     <div id="final-score">0</div>
-    <div id="final-round" style="font-size: 20px; color: #ffff00; margin-bottom: 20px;">ROUND 1</div>
+    <div id="final-round" style="font-size: 20px; color: #ffff00; margin-bottom: 10px;">ROUND 1</div>
+    <div id="final-time" style="font-size: 20px; color: #fff; margin-bottom: 20px;"></div>
     <button class="btn" onclick="retryGame()">RETRY</button>
 </div>
 
@@ -367,6 +368,13 @@ if ('serviceWorker' in navigator) {
     let currentRound = 1;
     let isTransitioning = false;
     let transitionTimer = 0;
+    let bombers = [];
+    let bombs = [];
+    let nuke = null;
+    let nukeEventTriggered = false;
+    let startTime = 0;
+    let endTime = 0;
+    let bomberSpawnTimer = 0;
     const mapColors = ['#222', '#1a1a2e', '#16213e', '#0f3460', '#1a1a1a'];
 
     // レベルシステム設定
@@ -549,6 +557,175 @@ if ('serviceWorker' in navigator) {
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
             ctx.fill();
+        }
+    }
+
+    class Bomber {
+        constructor() {
+            this.active = true;
+            this.width = 80;
+            this.height = 40;
+            this.direction = Math.random() < 0.5 ? 1 : -1;
+            this.x = this.direction === 1 ? -this.width : width + this.width;
+            this.y = random(100, height - 100);
+            this.vx = this.direction * 5;
+            this.shootCooldown = random(30, 60);
+        }
+
+        update() {
+            this.x += this.vx;
+            this.shootCooldown--;
+            if (this.shootCooldown <= 0) {
+                bombs.push(new Bomb(this.x, this.y));
+                this.shootCooldown = random(40, 80);
+            }
+            if ((this.direction === 1 && this.x > width + this.width) || 
+                (this.direction === -1 && this.x < -this.width)) {
+                this.active = false;
+            }
+        }
+
+        draw() {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.scale(this.direction, 1);
+            
+            // 本体
+            ctx.fillStyle = '#444';
+            ctx.beginPath();
+            ctx.moveTo(-40, 0);
+            ctx.lineTo(0, -15);
+            ctx.lineTo(40, 0);
+            ctx.lineTo(0, 15);
+            ctx.closePath();
+            ctx.fill();
+            
+            // 翼
+            ctx.fillStyle = '#333';
+            ctx.fillRect(-10, -40, 20, 80);
+            
+            // コックピット
+            ctx.fillStyle = '#66a';
+            ctx.beginPath();
+            ctx.arc(20, 0, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+    }
+
+    class Bomb {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.radius = 6;
+            this.timer = 60; 
+            this.isExploded = false;
+            this.explosionRadius = 0;
+            this.maxExplosionRadius = 100;
+            this.markedForDeletion = false;
+        }
+
+        update() {
+            if (!this.isExploded) {
+                this.timer--;
+                if (this.timer <= 0) {
+                    this.isExploded = true;
+                }
+            } else {
+                this.explosionRadius += 4;
+                if (this.explosionRadius > this.maxExplosionRadius) {
+                    this.markedForDeletion = true;
+                }
+                const dist = Math.hypot(this.x - slime.x, this.y - slime.y);
+                if (dist < this.explosionRadius + slime.radius) {
+                    slime.damage(1); 
+                }
+            }
+        }
+
+        draw() {
+            if (!this.isExploded) {
+                ctx.fillStyle = '#111';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 落下地点の警告
+                ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.maxExplosionRadius, 0, Math.PI * 2);
+                ctx.stroke();
+            } else {
+                const alpha = 1 - (this.explosionRadius / this.maxExplosionRadius);
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.explosionRadius);
+                gradient.addColorStop(0, `rgba(255, 255, 200, ${alpha})`);
+                gradient.addColorStop(0.5, `rgba(255, 100, 0, ${alpha})`);
+                gradient.addColorStop(1, `rgba(100, 0, 0, 0)`);
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.explosionRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
+    class Nuke {
+        constructor() {
+            this.x = width / 2;
+            this.y = -200;
+            this.targetY = height / 2;
+            this.radius = 120;
+            this.speed = 1.5;
+            this.isExploded = false;
+            this.explosionRadius = 0;
+        }
+
+        update() {
+            if (!this.isExploded) {
+                this.y += this.speed;
+                if (this.y >= this.targetY) {
+                    this.isExploded = true;
+                }
+            } else {
+                this.explosionRadius += 15;
+                if (this.explosionRadius > Math.max(width, height) * 1.5) {
+                    gameOver(true);
+                }
+            }
+        }
+
+        draw() {
+            if (!this.isExploded) {
+                // 巨大な爆弾
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.fillStyle = '#222';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 50, 100, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // フィン
+                ctx.fillRect(-60, -100, 120, 20);
+                ctx.fillRect(-10, -110, 20, 40);
+                ctx.restore();
+
+                // 地面の超巨大な警告
+                const pulse = Math.abs(Math.sin(Date.now() / 200));
+                ctx.strokeStyle = `rgba(255, 0, 0, ${pulse})`;
+                ctx.lineWidth = 15;
+                ctx.setLineDash([40, 20]);
+                ctx.beginPath();
+                ctx.arc(this.x, this.targetY, 300, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            } else {
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.explosionRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
     }
 
@@ -1119,6 +1296,9 @@ if ('serviceWorker' in navigator) {
         isPaused = false;
         nextLevelThreshold = 10;
         currentLevelThresholdBase = 10;
+        nukeEventTriggered = false;
+        nuke = null;
+        bomberSpawnTimer = 0;
 
         scoreEl.innerText = `SCORE: ${score}`;
         roundEl.innerText = `RD ${currentRound}`;
@@ -1130,6 +1310,8 @@ if ('serviceWorker' in navigator) {
         bullets = [];
         minions = [];
         particles = [];
+        bombers = [];
+        bombs = [];
 
         for (let i = 0; i < MAX_HUMANS; i++) {
             humans.push(new Human());
@@ -1138,16 +1320,36 @@ if ('serviceWorker' in navigator) {
 
     window.startGame = function() {
         initGame();
+        startTime = Date.now();
         currentState = GameState.PLAYING;
         document.getElementById('start-screen').style.display = 'none';
         document.getElementById('ui').style.display = 'block';
     };
 
-    function gameOver() {
+    function gameOver(isHumanVictory = false) {
+        endTime = Date.now();
+        const duration = (endTime - startTime) / 1000;
+        const mins = Math.floor(duration / 60);
+        const secs = Math.floor(duration % 60);
+        const timeStr = `${mins}分${secs}秒`;
+
         currentState = GameState.GAMEOVER;
         document.getElementById('game-over-screen').style.display = 'flex';
+        
+        const titleEl = document.getElementById('game-over-title');
+        if (isHumanVictory) {
+            titleEl.innerText = 'HUMAN VICTORY';
+            titleEl.style.color = '#00ccff';
+            titleEl.style.textShadow = '0 0 15px #00ccff';
+        } else {
+            titleEl.innerText = 'GAME OVER';
+            titleEl.style.color = '#ff0055';
+            titleEl.style.textShadow = '0 0 10px #ff0055';
+        }
+
         document.getElementById('final-score').innerText = score;
         document.getElementById('final-round').innerText = `ROUND ${currentRound}`;
+        document.getElementById('final-time').innerText = `生存時間: ${timeStr}`;
         document.getElementById('ui').style.display = 'none';
     }
 
@@ -1509,6 +1711,45 @@ if ('serviceWorker' in navigator) {
 
         if (!isSpecialAttacking) updateParticles();
         drawParticles();
+
+        // --- 新規：爆撃機と爆弾の処理 ---
+        if (!isSpecialAttacking && currentState === GameState.PLAYING) {
+            // 爆撃機のスポーン (ラウンド10以降)
+            if (currentRound >= 10) {
+                bomberSpawnTimer--;
+                if (bomberSpawnTimer <= 0) {
+                    bombers.push(new Bomber());
+                    bomberSpawnTimer = random(180, 400); 
+                }
+            }
+            
+            // 爆撃機の更新と描画
+            for (let i = bombers.length - 1; i >= 0; i--) {
+                const b = bombers[i];
+                b.update();
+                b.draw();
+                if (!b.active) bombers.splice(i, 1);
+            }
+            
+            // 爆弾の更新と描画
+            for (let i = bombs.length - 1; i >= 0; i--) {
+                const b = bombs[i];
+                b.update();
+                b.draw();
+                if (b.markedForDeletion) bombs.splice(i, 1);
+            }
+            
+            // 核爆弾の処理 (ラウンド20)
+            if (currentRound >= 20 && !nukeEventTriggered) {
+                nukeEventTriggered = true;
+                nuke = new Nuke();
+            }
+            
+            if (nuke) {
+                nuke.update();
+                nuke.draw();
+            }
+        }
 
         if (isSpecialAttacking) {
             // ビーム演出
