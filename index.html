@@ -1739,8 +1739,8 @@ if ('serviceWorker' in navigator) {
                 if (b.markedForDeletion) bombs.splice(i, 1);
             }
             
-            // 核爆弾の処理 (ラウンド20)
-            if (currentRound >= 20 && !nukeEventTriggered) {
+            // 核爆弾の処理 (ラウンド15)
+            if (currentRound >= 15 && !nukeEventTriggered) {
                 nukeEventTriggered = true;
                 nuke = new Nuke();
             }
