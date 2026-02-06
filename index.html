@@ -826,7 +826,7 @@ if ('serviceWorker' in navigator) {
         }
 
         activateSpecial() {
-            if (this.specialGauge >= this.maxSpecialGauge && !isSpecialAttacking && currentState === GameState.PLAYING) {
+            if ((this.specialGauge >= this.maxSpecialGauge || this.isInvincible) && !isSpecialAttacking && currentState === GameState.PLAYING) {
                 isSpecialAttacking = true;
                 specialAttackTimer = 120; // 約2秒間の演出
                 this.vx = 0;
@@ -836,9 +836,10 @@ if ('serviceWorker' in navigator) {
         }
 
         updateSpecialUI() {
-            const pct = Math.min(100, (this.specialGauge / this.maxSpecialGauge) * 100);
+            let pct = Math.min(100, (this.specialGauge / this.maxSpecialGauge) * 100);
+            if (this.isInvincible) pct = 100;
             specialBar.style.width = pct + '%';
-            specialText.innerText = `SPECIAL: ${Math.floor(pct)}%`;
+            specialText.innerText = this.isInvincible ? 'SPECIAL: READY (CHEAT)' : `SPECIAL: ${Math.floor(pct)}%`;
             
             if (pct >= 100 && !isSpecialAttacking) {
                 specialContainer.classList.add('special-ready');
@@ -1317,7 +1318,10 @@ if ('serviceWorker' in navigator) {
         levelEl.innerText = `NEXT: ${nextLevelThreshold}`;
 
         slime = new Slime();
-        if (isCheatInvincible) slime.isInvincible = true;
+        if (isCheatInvincible) {
+            slime.isInvincible = true;
+            slime.updateSpecialUI();
+        }
         humans = [];
         bullets = [];
         minions = [];
@@ -1559,7 +1563,7 @@ if ('serviceWorker' in navigator) {
                 b.taps++;
                 b.hitTimer = 10;
                 createParticles(tx, ty, '#fff', 5, 2, 0.1);
-                if (b.taps >= 5) {
+                if (b.taps >= 3) {
                     destroyBomber(b);
                 }
                 break;
@@ -1572,7 +1576,7 @@ if ('serviceWorker' in navigator) {
         score += 500;
         scoreEl.innerText = `SCORE: ${score}`;
         
-        const growthAmount = 100 * (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier;
+        const growthAmount = 300 * (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier;
         slime.grow(growthAmount);
         
         createParticles(b.x, b.y, '#ffaa00', 30, 8, 0.02);
@@ -1879,6 +1883,7 @@ if ('serviceWorker' in navigator) {
     window.cheatInvincible = function() {
         if (!slime) return "Game not started";
         slime.isInvincible = !slime.isInvincible;
+        slime.updateSpecialUI();
         console.log("Invincibility: " + (slime.isInvincible ? "ON" : "OFF"));
         return slime.isInvincible;
     };
