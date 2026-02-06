@@ -945,7 +945,7 @@ if ('serviceWorker' in navigator) {
                 if (currentRound >= 8) {
                     for (const other of humans) {
                         if (other.isTank && other.active) {
-                            if (Math.hypot(this.x - other.x, this.y - other.y) < 150) {
+                            if (Math.hypot(this.x - other.x, this.y - other.y) < 80) {
                                 tooCloseToTank = true;
                                 break;
                             }
@@ -1016,7 +1016,7 @@ if ('serviceWorker' in navigator) {
                 for (const other of humans) {
                     if (other.isTank && other.active) {
                         const distToTank = Math.hypot(this.x - other.x, this.y - other.y);
-                        if (distToTank < 150) {
+                        if (distToTank < 80) {
                             const angle = Math.atan2(this.y - other.y, this.x - other.x);
                             this.vx += Math.cos(angle) * 0.5;
                             this.vy += Math.sin(angle) * 0.5;
