@@ -1342,7 +1342,7 @@ if ('serviceWorker' in navigator) {
             scoreEl.innerText = `SCORE: ${score}`;
         }
         if (h.isShooter || h.isTank) {
-            const multiplier = h.isTank ? 3 : 1;
+            const multiplier = h.isTank ? 10 : 1;
             const gaugeIncrement = Math.max(1, 10 / Math.pow(1.8, currentRound - 1)) * multiplier;
             slime.specialGauge = Math.min(slime.maxSpecialGauge, slime.specialGauge + gaugeIncrement);
             if (!skipUIUpdate) {
