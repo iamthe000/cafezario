@@ -1,0 +1,1563 @@
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+}
+
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score-display');
+    const levelEl = document.getElementById('level-display');
+    const roundEl = document.getElementById('round-display');
+    const upgradeMenu = document.getElementById('upgrade-menu');
+    
+    // HP UI要素
+    const hpBar = document.getElementById('hp-bar');
+    const hpText = document.getElementById('hp-text');
+    
+    // スペシャルUI要素
+    const specialBar = document.getElementById('special-bar');
+    const specialText = document.getElementById('special-text');
+    const specialContainer = document.getElementById('special-container');
+    const specialButton = document.getElementById('special-button');
+
+    const GameState = {
+        START: 'START',
+        PLAYING: 'PLAYING',
+        UPGRADE: 'UPGRADE',
+        GAMEOVER: 'GAMEOVER'
+    };
+    let currentState = GameState.START;
+    let graphicsClickCount = 0;
+    let isCheatInvincible = false;
+
+    let width, height;
+    let score = 0;
+    let flashAlpha = 0;
+    let isPaused = false;
+    let isLowGraphics = false;
+    let isSpecialAttacking = false;
+    let specialAttackTimer = 0;
+
+    // ラウンド・遷移管理
+    let currentRound = 1;
+    let isTransitioning = false;
+    let transitionTimer = 0;
+    let bombers = [];
+    let bombs = [];
+    let nuke = null;
+    let nukeEventTriggered = false;
+    let startTime = 0;
+    let endTime = 0;
+    let bomberSpawnTimer = 0;
+    const mapColors = ['#222', '#1a1a2e', '#16213e', '#0f3460', '#1a1a1a'];
+
+    // レベルシステム設定
+    let nextLevelThreshold = 10;
+    let currentLevelThresholdBase = 10;
+
+    const UPGRADE_POOL = [
+        {
+            id: 'speed',
+            name: '素早さ進化',
+            description: '移動速度が15%アップ',
+            effect: () => { slime.speedMultiplier *= 1.15; }
+        },
+        {
+            id: 'growth',
+            name: '巨大化加速',
+            description: '人間吸収時の成長速度が25%アップ',
+            effect: () => { slime.growthMultiplier *= 1.25; }
+        },
+        {
+            id: 'defense',
+            name: '硬化進化',
+            description: '受けるダメージを15%軽減',
+            effect: () => { 
+                slime.damageReduction = 1 - (1 - slime.damageReduction) * 0.85; 
+            }
+        },
+        {
+            id: 'regen',
+            name: '自己再生',
+            description: 'HPが少しずつ自動回復するようになる',
+            effect: () => { slime.regenAmount += 2; }
+        },
+        {
+            id: 'magnet',
+            name: '吸収領域拡大',
+            description: '人間を吸収できる範囲が広がる',
+            effect: () => { slime.absorbRangeBonus += 10; }
+        },
+        {
+            id: 'summon',
+            name: '分裂召喚',
+            description: '子スライムを3体呼び出す',
+            effect: () => {
+                for(let i=0; i<3; i++) {
+                    minions.push(new MinionSlime(slime.x, slime.y));
+                }
+            }
+        }
+    ];
+    let currentChoices = [];
+    
+    // ゲーム設定
+    const FRICTION = 0.98;
+    const ACCELERATION = 0.8;
+    const UNSTABLE_FACTOR = 0.3;
+    const MAX_SPEED = 15;
+
+    // 入力管理
+    const keys = {
+        ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false,
+        w: false, s: false, a: false, d: false
+    };
+
+    const touchInput = { active: false, x: 0, y: 0 };
+
+    window.addEventListener('keydown', (e) => {
+        keys[e.key] = true;
+        
+        // スペシャル攻撃発動 (Space, X)
+        if ((e.key === ' ' || e.key === 'x') && currentState === GameState.PLAYING) {
+            if (slime && !isSpecialAttacking) {
+                slime.activateSpecial();
+            }
+        }
+
+        if (currentState === GameState.UPGRADE) {
+            if (e.key === '0') {
+                useRegenUpgrade();
+            } else {
+                const idx = parseInt(e.key) - 1;
+                if (idx >= 0 && idx < currentChoices.length) {
+                    chooseUpgrade(currentChoices[idx].id);
+                }
+            }
+        }
+    });
+    window.addEventListener('keyup', (e) => keys[e.key] = false);
+    
+    window.addEventListener('touchstart', (e) => {
+        touchInput.active = true;
+        updateTouchPos(e.touches[0]);
+    }, {passive: false});
+    
+    window.addEventListener('touchmove', (e) => {
+        if(touchInput.active) {
+            updateTouchPos(e.touches[0]);
+        }
+        e.preventDefault();
+    }, {passive: false});
+
+    window.addEventListener('touchend', () => {
+        touchInput.active = false;
+    });
+
+    window.addEventListener('pointerdown', (e) => {
+        if (currentState === GameState.PLAYING && e.target === canvas) {
+            handleTap(e.clientX, e.clientY);
+        }
+    });
+
+    function updateTouchPos(touch) {
+        touchInput.x = touch.clientX - width / 2;
+        touchInput.y = touch.clientY - height / 2;
+    }
+
+    window.addEventListener('resize', resize);
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    resize();
+
+    specialButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (slime) slime.activateSpecial();
+    });
+
+    window.toggleGraphics = function() {
+        const btn = document.getElementById('graphics-toggle');
+        if (currentState === GameState.START) {
+            graphicsClickCount++;
+            if (graphicsClickCount === 10) {
+                isCheatInvincible = true;
+                btn.style.backgroundColor = '#ff0055';
+                btn.style.color = '#fff';
+                btn.innerText = 'CHEAT: INVINCIBLE';
+                console.log("Cheat Activated: Invincibility ON");
+                setTimeout(() => {
+                    btn.style.backgroundColor = '';
+                    btn.style.color = '';
+                    btn.innerText = isLowGraphics ? 'Graphics: Low' : 'Graphics: High';
+                }, 2000);
+            }
+        }
+        isLowGraphics = !isLowGraphics;
+        if (!isCheatInvincible || btn.innerText !== 'CHEAT: INVINCIBLE') {
+            btn.innerText = isLowGraphics ? 'Graphics: Low' : 'Graphics: High';
+        }
+        if (isLowGraphics) {
+            particles = [];
+        }
+        btn.blur();
+    };
+
+    const random = (min, max) => Math.random() * (max - min) + min;
+
+    // ----------------------------------------------------
+    // クラス定義
+    // ----------------------------------------------------
+
+    class Bullet {
+        constructor(x, y, targetX, targetY, damage = 10, radius = 4, color = '#ff3333') {
+            this.x = x;
+            this.y = y;
+            const angle = Math.atan2(targetY - y, targetX - x);
+            const speed = 6;
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+            this.radius = radius;
+            this.damage = damage;
+            this.color = color;
+            this.markedForDeletion = false;
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            if (this.x < 0 || this.x > width || this.y < 0 || this.y > height) {
+                this.markedForDeletion = true;
+            }
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    class Bomber {
+        constructor() {
+            this.active = true;
+            this.width = 80;
+            this.height = 40;
+            this.direction = Math.random() < 0.5 ? 1 : -1;
+            this.x = this.direction === 1 ? -this.width : width + this.width;
+            this.y = random(100, height - 100);
+            this.vx = this.direction * 5;
+            this.shootCooldown = random(30, 60);
+            this.taps = 0;
+            this.hitTimer = 0;
+        }
+
+        update() {
+            this.x += this.vx;
+            if (this.hitTimer > 0) this.hitTimer--;
+            this.shootCooldown--;
+            if (this.shootCooldown <= 0) {
+                bombs.push(new Bomb(this.x, this.y));
+                this.shootCooldown = random(40, 80);
+            }
+            if ((this.direction === 1 && this.x > width + this.width) || 
+                (this.direction === -1 && this.x < -this.width)) {
+                this.active = false;
+            }
+        }
+
+        draw() {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            if (this.hitTimer > 0) {
+                ctx.translate(Math.random() * 6 - 3, Math.random() * 6 - 3);
+            }
+            ctx.scale(this.direction, 1);
+            
+            // 本体
+            ctx.fillStyle = this.hitTimer > 0 ? '#fff' : '#444';
+            ctx.beginPath();
+            ctx.moveTo(-40, 0);
+            ctx.lineTo(0, -15);
+            ctx.lineTo(40, 0);
+            ctx.lineTo(0, 15);
+            ctx.closePath();
+            ctx.fill();
+            
+            // 翼
+            ctx.fillStyle = '#333';
+            ctx.fillRect(-10, -40, 20, 80);
+            
+            // コックピット
+            ctx.fillStyle = '#66a';
+            ctx.beginPath();
+            ctx.arc(20, 0, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+    }
+
+    class Bomb {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.radius = 6;
+            this.timer = 60; 
+            this.isExploded = false;
+            this.explosionRadius = 0;
+            this.maxExplosionRadius = 100;
+            this.markedForDeletion = false;
+        }
+
+        update() {
+            if (!this.isExploded) {
+                this.timer--;
+                if (this.timer <= 0) {
+                    this.isExploded = true;
+                }
+            } else {
+                this.explosionRadius += 4;
+                if (this.explosionRadius > this.maxExplosionRadius) {
+                    this.markedForDeletion = true;
+                }
+                const dist = Math.hypot(this.x - slime.x, this.y - slime.y);
+                if (dist < this.explosionRadius + slime.radius) {
+                    slime.damage(1); 
+                }
+            }
+        }
+
+        draw() {
+            if (!this.isExploded) {
+                ctx.fillStyle = '#111';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 落下地点の警告
+                ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.maxExplosionRadius, 0, Math.PI * 2);
+                ctx.stroke();
+            } else {
+                const alpha = 1 - (this.explosionRadius / this.maxExplosionRadius);
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.explosionRadius);
+                gradient.addColorStop(0, `rgba(255, 255, 200, ${alpha})`);
+                gradient.addColorStop(0.5, `rgba(255, 100, 0, ${alpha})`);
+                gradient.addColorStop(1, `rgba(100, 0, 0, 0)`);
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.explosionRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
+    class Nuke {
+        constructor() {
+            this.x = width / 2;
+            this.y = -200;
+            this.targetY = height / 2;
+            this.radius = 120;
+            this.speed = 1.5;
+            this.isExploded = false;
+            this.explosionRadius = 0;
+        }
+
+        update() {
+            if (!this.isExploded) {
+                this.y += this.speed;
+                if (this.y >= this.targetY) {
+                    this.isExploded = true;
+                }
+            } else {
+                this.explosionRadius += 15;
+                if (this.explosionRadius > Math.max(width, height) * 1.5) {
+                    gameOver(true);
+                }
+            }
+        }
+
+        draw() {
+            if (!this.isExploded) {
+                // 巨大な爆弾
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.fillStyle = '#222';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 50, 100, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // フィン
+                ctx.fillRect(-60, -100, 120, 20);
+                ctx.fillRect(-10, -110, 20, 40);
+                ctx.restore();
+
+                // 地面の超巨大な警告
+                const pulse = Math.abs(Math.sin(Date.now() / 200));
+                ctx.strokeStyle = `rgba(255, 0, 0, ${pulse})`;
+                ctx.lineWidth = 15;
+                ctx.setLineDash([40, 20]);
+                ctx.beginPath();
+                ctx.arc(this.x, this.targetY, 300, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            } else {
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.explosionRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
+    class Slime {
+        constructor() {
+            this.x = width / 2;
+            this.y = height / 2;
+            this.vx = 0;
+            this.vy = 0;
+            this.radius = 20;
+            this.color = '#00ff88';
+            this.wobblePhase = 0;
+
+            // HPシステムを追加
+            this.maxHp = 100;
+            this.hp = 100;
+            this.updateHpUI();
+
+            // 成長属性
+            this.speedMultiplier = 1.0;
+            this.growthMultiplier = 1.0;
+            this.damageReduction = 0;
+            this.regenAmount = 0;
+            this.absorbRangeBonus = 0;
+
+            // スペシャルゲージ
+            this.specialGauge = 0;
+            this.maxSpecialGauge = 100;
+            this.updateSpecialUI();
+
+            this.isInvincible = false;
+        }
+
+        update() {
+            if (isPaused) return;
+
+            // 自動回復
+            if (this.regenAmount > 0 && this.hp < this.maxHp) {
+                this.hp = Math.min(this.maxHp, this.hp + this.regenAmount / 60);
+                this.updateHpUI();
+            }
+
+            let ax = 0;
+            let ay = 0;
+
+            const currentAcc = ACCELERATION * this.speedMultiplier;
+            const currentMaxSpeed = MAX_SPEED * this.speedMultiplier;
+
+            if (keys.ArrowUp || keys.w) ay -= currentAcc;
+            if (keys.ArrowDown || keys.s) ay += currentAcc;
+            if (keys.ArrowLeft || keys.a) ax -= currentAcc;
+            if (keys.ArrowRight || keys.d) ax += currentAcc;
+
+            if (touchInput.active) {
+                const angle = Math.atan2(touchInput.y, touchInput.x);
+                const dist = Math.min(Math.hypot(touchInput.x, touchInput.y), 100) / 100;
+                ax += Math.cos(angle) * currentAcc * dist * 1.5;
+                ay += Math.sin(angle) * currentAcc * dist * 1.5;
+            }
+
+            if (ax !== 0 || ay !== 0) {
+                ax += random(-UNSTABLE_FACTOR, UNSTABLE_FACTOR);
+                ay += random(-UNSTABLE_FACTOR, UNSTABLE_FACTOR);
+            }
+
+            this.vx += ax;
+            this.vy += ay;
+            this.vx *= FRICTION;
+            this.vy *= FRICTION;
+
+            const speed = Math.sqrt(this.vx**2 + this.vy**2);
+            if (speed > currentMaxSpeed) {
+                this.vx = (this.vx / speed) * currentMaxSpeed;
+                this.vy = (this.vy / speed) * currentMaxSpeed;
+            }
+
+            this.x += this.vx;
+            this.y += this.vy;
+
+            if (this.x < this.radius) { this.x = this.radius; this.vx *= -0.8; }
+            if (this.x > width - this.radius) { this.x = width - this.radius; this.vx *= -0.8; }
+            if (this.y < this.radius) { this.y = this.radius; this.vy *= -0.8; }
+            if (this.y > height - this.radius) { this.y = height - this.radius; this.vy *= -0.8; }
+
+            this.wobblePhase += 0.1 + (speed * 0.05);
+        }
+
+        activateSpecial() {
+            if ((this.specialGauge >= this.maxSpecialGauge || this.isInvincible) && !isSpecialAttacking && currentState === GameState.PLAYING) {
+                isSpecialAttacking = true;
+                specialAttackTimer = 120; // 約2秒間の演出
+                this.vx = 0;
+                this.vy = 0;
+                this.updateSpecialUI();
+            }
+        }
+
+        updateSpecialUI() {
+            let pct = Math.min(100, (this.specialGauge / this.maxSpecialGauge) * 100);
+            if (this.isInvincible) pct = 100;
+            specialBar.style.width = pct + '%';
+            specialText.innerText = this.isInvincible ? 'SPECIAL: READY (CHEAT)' : `SPECIAL: ${Math.floor(pct)}%`;
+            
+            if (pct >= 100 && !isSpecialAttacking) {
+                specialContainer.classList.add('special-ready');
+                specialBar.style.backgroundColor = '#ffffff';
+                if (specialButton) specialButton.style.display = 'block';
+            } else {
+                specialContainer.classList.remove('special-ready');
+                specialBar.style.backgroundColor = '#ffff00';
+                if (specialButton) specialButton.style.display = 'none';
+            }
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            const segments = isLowGraphics ? 6 : 12;
+            for (let i = 0; i <= segments; i++) {
+                const angle = (i / segments) * Math.PI * 2;
+                const r = this.radius + Math.sin(angle * 3 + this.wobblePhase) * (this.radius * 0.15) 
+                          + Math.cos(angle * 5 - this.wobblePhase) * (this.radius * 0.1);
+                const px = this.x + Math.cos(angle) * r;
+                const py = this.y + Math.sin(angle) * r;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fill();
+            
+            const speed = Math.sqrt(this.vx**2 + this.vy**2);
+            const lookX = speed > 0.1 ? (this.vx / speed) * (this.radius * 0.3) : 0;
+            const lookY = speed > 0.1 ? (this.vy / speed) * (this.radius * 0.3) : 0;
+
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(this.x - this.radius*0.3 + lookX, this.y - this.radius*0.1 + lookY, this.radius * 0.25, 0, Math.PI * 2);
+            ctx.arc(this.x + this.radius*0.3 + lookX, this.y - this.radius*0.1 + lookY, this.radius * 0.25, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(this.x - this.radius*0.3 + lookX*1.5, this.y - this.radius*0.1 + lookY*1.5, this.radius * 0.1, 0, Math.PI * 2);
+            ctx.arc(this.x + this.radius*0.3 + lookX*1.5, this.y - this.radius*0.1 + lookY*1.5, this.radius * 0.1, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        grow(amount) {
+            this.radius += amount;
+        }
+
+        // HPを減らす処理
+        damage(amount) {
+            if (this.isInvincible) return;
+            const reducedAmount = amount * (1 - this.damageReduction);
+            this.hp -= reducedAmount;
+            
+            createParticles(this.x, this.y, '#ff0000');
+            
+            // HPが0以下になったらゲームオーバー
+            if (this.hp <= 0) {
+                this.hp = 0;
+                this.updateHpUI();
+                gameOver();
+            } else {
+                this.updateHpUI();
+            }
+        }
+
+        // HPを回復する処理
+        healFullAndUpgrade() {
+            this.maxHp += 20; // 最大HPを増やす
+            this.hp = this.maxHp; // 全回復
+            this.updateHpUI();
+            this.grow(5); // サイズも少し大きくする
+        }
+
+        // UI更新
+        updateHpUI() {
+            const pct = Math.max(0, (this.hp / this.maxHp) * 100);
+            hpBar.style.width = pct + '%';
+            hpText.innerText = `HP: ${Math.ceil(this.hp)} / ${this.maxHp}`;
+            
+            // HPが減るとバーの色が変わる演出
+            if (pct < 30) hpBar.style.backgroundColor = '#ff0000';
+            else if (pct < 60) hpBar.style.backgroundColor = '#ffff00';
+            else hpBar.style.backgroundColor = '#00ff00';
+        }
+    }
+
+    class MinionSlime {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.vx = random(-5, 5);
+            this.vy = random(-5, 5);
+            this.radius = 12;
+            this.color = '#00ccff';
+            this.life = 600; 
+            this.markedForDeletion = false;
+            this.currentTarget = null;
+            this.retargetTimer = 0;
+        }
+
+        update() {
+            if (isPaused) return;
+
+            // ランダムな動きをベースに追加
+            if (Math.random() < 0.1) {
+                this.vx += random(-0.8, 0.8);
+                this.vy += random(-0.8, 0.8);
+            }
+
+            this.retargetTimer--;
+            if (!this.currentTarget || !this.currentTarget.active || this.retargetTimer <= 0) {
+                let minStartDist = 9999;
+                let nearest = null;
+                for (const h of humans) {
+                    if (!h.active) continue;
+                    const d = Math.hypot(h.x - this.x, h.y - this.y);
+                    if (d < minStartDist) {
+                        minStartDist = d;
+                        nearest = h;
+                    }
+                }
+                this.currentTarget = nearest;
+                this.retargetTimer = random(30, 90); // 0.5〜1.5秒ごとにターゲットを見直す
+            }
+
+            if (this.currentTarget) {
+                const angle = Math.atan2(this.currentTarget.y - this.y, this.currentTarget.x - this.x);
+                // 追尾を弱めに設定
+                this.vx += Math.cos(angle) * 0.15;
+                this.vy += Math.sin(angle) * 0.15;
+            }
+
+            this.vx *= 0.97; // 慣性を少し強く残す
+            this.vy *= 0.97;
+            this.x += this.vx;
+            this.y += this.vy;
+
+            if (this.x < 0 || this.x > width) this.vx *= -1;
+            if (this.y < 0 || this.y > height) this.vy *= -1;
+            this.x = Math.max(0, Math.min(width, this.x));
+            this.y = Math.max(0, Math.min(height, this.y));
+
+            this.life--;
+            if (this.life <= 0) this.markedForDeletion = true;
+        }
+
+        draw() {
+            ctx.globalAlpha = Math.min(1.0, this.life / 60);
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(this.x - 4, this.y - 2, 3, 0, Math.PI*2);
+            ctx.arc(this.x + 4, this.y - 2, 3, 0, Math.PI*2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    class Tank {
+        constructor() {
+            this.active = true;
+            this.respawnTimer = 0;
+            this.isTank = true;
+            this.respawn();
+        }
+
+        respawn() {
+            this.active = true;
+            this.respawnTimer = 0;
+            let safe = false;
+            let attempts = 0;
+            const threshold = Math.min(slime ? slime.radius + 200 : 200, Math.min(width, height) * 0.4);
+            while(!safe && attempts < 100) {
+                attempts++;
+                this.x = random(40, width - 40);
+                this.y = random(40, height - 40);
+                if (!slime) {
+                    safe = true;
+                } else {
+                    const dist = Math.hypot(this.x - slime.x, this.y - slime.y);
+                    if (dist > threshold) safe = true;
+                }
+            }
+            
+            this.radius = 24; 
+            this.vx = 0;
+            this.vy = 0;
+            this.angle = random(0, Math.PI * 2);
+            this.turretAngle = 0;
+            this.shootCooldown = random(60, 180);
+            this.color = '#556644';
+        }
+
+        die() {
+            this.active = false;
+            this.respawnTimer = random(300, 600);
+        }
+
+        update() {
+            if (isPaused) return;
+
+            if (!this.active) {
+                this.respawnTimer--;
+                if (this.respawnTimer <= 0) {
+                    this.respawn();
+                }
+                return;
+            }
+
+            const distToSlime = Math.hypot(this.x - slime.x, this.y - slime.y);
+            this.turretAngle = Math.atan2(slime.y - this.y, slime.x - this.x);
+
+            if (distToSlime > 400) {
+                this.vx += Math.cos(this.turretAngle) * 0.05;
+                this.vy += Math.sin(this.turretAngle) * 0.05;
+            } else {
+                if (Math.random() < 0.05) {
+                    this.vx += random(-0.2, 0.2);
+                    this.vy += random(-0.2, 0.2);
+                }
+            }
+
+            this.vx *= 0.98;
+            this.vy *= 0.98;
+            this.x += this.vx;
+            this.y += this.vy;
+
+            this.shootCooldown--;
+            if (this.shootCooldown <= 0 && distToSlime < 600) {
+                bullets.push(new Bullet(this.x, this.y, slime.x, slime.y, 20, 6, '#ffaa00'));
+                this.shootCooldown = 120;
+                createParticles(this.x + Math.cos(this.turretAngle) * 20, this.y + Math.sin(this.turretAngle) * 20, '#888', 5, 1, 0.02);
+            }
+
+            if (this.x < this.radius || this.x > width - this.radius) this.vx *= -1;
+            if (this.y < this.radius || this.y > height - this.radius) this.vy *= -1;
+            this.x = Math.max(this.radius, Math.min(width - this.radius, this.x));
+            this.y = Math.max(this.radius, Math.min(height - this.radius, this.y));
+        }
+
+        draw() {
+            if (!this.active) return;
+            
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(Math.atan2(this.vy, this.vx) || this.angle);
+            
+            ctx.fillStyle = '#445533';
+            ctx.fillRect(-20, -15, 40, 30);
+            
+            ctx.fillStyle = '#222';
+            ctx.fillRect(-22, -18, 44, 7);
+            ctx.fillRect(-22, 11, 44, 7);
+            ctx.restore();
+
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.turretAngle);
+            ctx.fillStyle = '#556644';
+            ctx.fillRect(-12, -12, 24, 24);
+            ctx.fillStyle = '#333';
+            ctx.fillRect(12, -4, 20, 8);
+            ctx.restore();
+        }
+    }
+
+    class Human {
+        constructor() {
+            this.active = true;
+            this.respawnTimer = 0;
+            this.respawn();
+        }
+
+        respawn() {
+            this.active = true;
+            this.respawnTimer = 0;
+            let safe = false;
+            let attempts = 0;
+            const threshold = Math.min(slime ? slime.radius + 150 : 150, Math.min(width, height) * 0.4);
+            while(!safe && attempts < 100) {
+                attempts++;
+                this.x = random(20, width - 20);
+                this.y = random(20, height - 20);
+
+                // 戦車の近くには出現しないようにする
+                let tooCloseToTank = false;
+                if (currentRound >= 8) {
+                    for (const other of humans) {
+                        if (other.isTank && other.active) {
+                            if (Math.hypot(this.x - other.x, this.y - other.y) < 80) {
+                                tooCloseToTank = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (tooCloseToTank) continue;
+
+                // 初期生成時にスライムがまだいない場合は回避
+                if (!slime) {
+                    safe = true;
+                } else {
+                    const dist = Math.hypot(this.x - slime.x, this.y - slime.y);
+                    if (dist > threshold) safe = true;
+                }
+            }
+            
+            this.radius = 8;
+            this.vx = random(-1, 1);
+            this.vy = random(-1, 1);
+            this.panic = false;
+
+            this.isShooter = Math.random() < 0.2;
+            
+            if (this.isShooter) {
+                this.color = '#aa00aa';
+                this.shootCooldown = random(100, 300);
+                this.gunRecoil = 0;
+                this.pauseTimer = 0;
+            } else {
+                this.color = `hsl(${random(0, 360)}, 70%, 60%)`;
+            }
+        }
+
+        die() {
+            this.active = false;
+            this.respawnTimer = random(120, 360);
+        }
+
+        update() {
+            if (isPaused) return;
+
+            if (!this.active) {
+                this.respawnTimer--;
+                if (this.respawnTimer <= 0) {
+                    this.respawn();
+                }
+                return;
+            }
+
+            const distToSlime = Math.hypot(this.x - slime.x, this.y - slime.y);
+            
+            if (distToSlime < slime.radius + 120) {
+                this.panic = true;
+                const angle = Math.atan2(this.y - slime.y, this.x - slime.x);
+                this.vx += Math.cos(angle) * 0.25;
+                this.vy += Math.sin(angle) * 0.25;
+            } else {
+                this.panic = false;
+                if (Math.random() < 0.05) {
+                    this.vx += random(-0.5, 0.5);
+                    this.vy += random(-0.5, 0.5);
+                }
+            }
+
+            // 戦車回避ロジック
+            if (currentRound >= 8) {
+                for (const other of humans) {
+                    if (other.isTank && other.active) {
+                        const distToTank = Math.hypot(this.x - other.x, this.y - other.y);
+                        if (distToTank < 80) {
+                            const angle = Math.atan2(this.y - other.y, this.x - other.x);
+                            this.vx += Math.cos(angle) * 0.5;
+                            this.vy += Math.sin(angle) * 0.5;
+                        }
+                    }
+                }
+            }
+
+            if (this.isShooter) {
+                if (this.pauseTimer > 0) {
+                    this.pauseTimer--;
+                    this.vx = 0;
+                    this.vy = 0;
+                } else {
+                    this.shootCooldown--;
+                    if (this.shootCooldown <= 0 && distToSlime < 400 && distToSlime > 50) {
+                        bullets.push(new Bullet(this.x, this.y, slime.x, slime.y));
+                        this.shootCooldown = 360; // 発射間隔を広く
+                        this.gunRecoil = 12;      // 反動
+                        this.pauseTimer = 60;     // 1秒間停止 (60FPS想定)
+
+                        // 反動で少し下がる
+                        const angle = Math.atan2(slime.y - this.y, slime.x - this.x);
+                        this.vx = -Math.cos(angle) * 3;
+                        this.vy = -Math.sin(angle) * 3;
+
+                        // 煙の演出
+                        createParticles(this.x + Math.cos(angle) * 10, this.y + Math.sin(angle) * 10, '#888', 5, 1, 0.02);
+                    }
+                }
+                if (this.gunRecoil > 0) this.gunRecoil *= 0.8;
+            }
+
+            const maxSpeed = this.panic ? 4 : 1.5;
+            const speed = Math.sqrt(this.vx**2 + this.vy**2);
+            if (speed > maxSpeed) {
+                this.vx = (this.vx / speed) * maxSpeed;
+                this.vy = (this.vy / speed) * maxSpeed;
+            }
+
+            this.x += this.vx;
+            this.y += this.vy;
+
+            if (this.x < 0 || this.x > width) this.vx *= -1;
+            if (this.y < 0 || this.y > height) this.vy *= -1;
+
+            this.x = Math.max(0, Math.min(width, this.x));
+            this.y = Math.max(0, Math.min(height, this.y));
+        }
+
+        draw() {
+            if (!this.active) return;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (this.isShooter) {
+                // 銃の描画
+                const angle = Math.atan2(slime.y - this.y, slime.x - this.x);
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(angle);
+                
+                // 銃本体
+                ctx.fillStyle = '#333';
+                ctx.fillRect(10 - this.gunRecoil, -2, 15, 4);
+                
+                ctx.restore();
+
+                // シルクハットの描画 (反動で少し動く)
+                ctx.fillStyle = '#111';
+                ctx.fillRect(this.x - 10, this.y - 10 - this.gunRecoil * 0.5, 20, 4);
+                ctx.fillRect(this.x - 6, this.y - 22 - this.gunRecoil * 0.5, 12, 12);
+            }
+
+            if (this.panic) {
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText('!', this.x - 2, this.y - 12);
+            }
+        }
+    }
+
+    // ----------------------------------------------------
+    // ゲーム進行管理
+    // ----------------------------------------------------
+
+    let slime;
+    let humans = [];
+    let bullets = [];
+    let minions = [];
+    let particles = [];
+    const MAX_HUMANS = 30;
+
+    function initGame() {
+        score = 0;
+        currentRound = 1;
+        isTransitioning = false;
+        isPaused = false;
+        nextLevelThreshold = 10;
+        currentLevelThresholdBase = 10;
+        nukeEventTriggered = false;
+        nuke = null;
+        bomberSpawnTimer = 0;
+
+        scoreEl.innerText = `SCORE: ${score}`;
+        roundEl.innerText = `RD ${currentRound}`;
+        levelEl.innerText = `NEXT: ${nextLevelThreshold}`;
+
+        slime = new Slime();
+        if (isCheatInvincible) {
+            slime.isInvincible = true;
+            slime.updateSpecialUI();
+        }
+        humans = [];
+        bullets = [];
+        minions = [];
+        particles = [];
+        bombers = [];
+        bombs = [];
+
+        for (let i = 0; i < MAX_HUMANS; i++) {
+            humans.push(new Human());
+        }
+    }
+
+    window.startGame = function() {
+        initGame();
+        startTime = Date.now();
+        currentState = GameState.PLAYING;
+        document.getElementById('start-screen').style.display = 'none';
+        document.getElementById('ui').style.display = 'block';
+    };
+
+    function gameOver(isHumanVictory = false) {
+        endTime = Date.now();
+        const duration = (endTime - startTime) / 1000;
+        const mins = Math.floor(duration / 60);
+        const secs = Math.floor(duration % 60);
+        const timeStr = `${mins}分${secs}秒`;
+
+        currentState = GameState.GAMEOVER;
+        document.getElementById('game-over-screen').style.display = 'flex';
+        
+        const titleEl = document.getElementById('game-over-title');
+        if (isHumanVictory) {
+            titleEl.innerText = 'HUMAN VICTORY';
+            titleEl.style.color = '#00ccff';
+            titleEl.style.textShadow = '0 0 15px #00ccff';
+        } else {
+            titleEl.innerText = 'GAME OVER';
+            titleEl.style.color = '#ff0055';
+            titleEl.style.textShadow = '0 0 10px #ff0055';
+        }
+
+        document.getElementById('final-score').innerText = score;
+        document.getElementById('final-round').innerText = `ROUND ${currentRound}`;
+        document.getElementById('final-time').innerText = `生存時間: ${timeStr}`;
+        document.getElementById('ui').style.display = 'none';
+    }
+
+    window.retryGame = function() {
+        document.getElementById('game-over-screen').style.display = 'none';
+        startGame();
+    };
+
+    function createParticles(x, y, color, count = 8, speed = 3, decay = 0.05) {
+        if (isLowGraphics) return;
+        for(let i=0; i<count; i++) {
+            particles.push({
+                x: x, y: y,
+                vx: random(-speed, speed), vy: random(-speed, speed),
+                life: 1.0,
+                color: color,
+                decay: decay
+            });
+        }
+    }
+
+    function updateParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= p.decay || 0.05;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    function drawParticles() {
+        for (const p of particles) {
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    function checkLevelUp() {
+        if (score >= nextLevelThreshold) {
+            isPaused = true;
+            currentState = GameState.UPGRADE;
+            showUpgradeMenu();
+        }
+    }
+
+    function useRegenUpgrade() {
+        const cost = 50;
+        if (score >= cost) {
+            score -= cost;
+            scoreEl.innerText = `SCORE: ${score}`;
+            slime.healFullAndUpgrade();
+            finishUpgrade();
+        }
+    }
+
+    function showUpgradeMenu() {
+        upgradeMenu.style.display = 'block';
+        const container = document.getElementById('upgrade-options');
+        if (!container) return;
+        container.innerHTML = '';
+        
+        // シャッフルして3つ選ぶ
+        const shuffled = [...UPGRADE_POOL].sort(() => 0.5 - Math.random());
+        currentChoices = shuffled.slice(0, 3);
+        
+        currentChoices.forEach((upgrade, index) => {
+            const btn = document.createElement('button');
+            btn.className = 'btn' + (index % 2 === 1 ? ' btn-secondary' : '');
+            btn.innerHTML = `[${index + 1}] ${upgrade.name}<br><small style="font-size: 12px; opacity: 0.8;">${upgrade.description}</small>`;
+            btn.onclick = () => chooseUpgrade(upgrade.id);
+            container.appendChild(btn);
+        });
+
+        // 特別な選択肢：再生進化
+        const regenCost = 50;
+        const regenBtn = document.createElement('button');
+        regenBtn.className = 'btn';
+        regenBtn.style.marginTop = '20px';
+        regenBtn.style.borderColor = '#ff0055';
+        regenBtn.style.color = '#ff0055';
+        
+        if (score < regenCost) {
+            regenBtn.style.opacity = '0.5';
+            regenBtn.style.cursor = 'not-allowed';
+            regenBtn.innerHTML = `[0] 再生進化 (必要SCORE: ${regenCost})<br><small style="font-size: 11px;">スコアが足りません</small>`;
+        } else {
+            regenBtn.innerHTML = `[0] 再生進化 (消費SCORE: ${regenCost})<br><small style="font-size: 11px;">HP全回復 + 最大HPアップ</small>`;
+            regenBtn.onclick = () => useRegenUpgrade();
+        }
+        container.appendChild(regenBtn);
+    }
+
+    function finishUpgrade() {
+        upgradeMenu.style.display = 'none';
+        isPaused = false;
+        currentState = GameState.PLAYING;
+
+        currentLevelThresholdBase = Math.floor(currentLevelThresholdBase * 1.5);
+        nextLevelThreshold = score + currentLevelThresholdBase;
+        
+        levelEl.innerText = `NEXT: ${nextLevelThreshold}`;
+        createParticles(slime.x, slime.y, '#00ff88');
+    }
+
+    window.chooseUpgrade = function(upgradeId) {
+        const upgrade = UPGRADE_POOL.find(u => u.id === upgradeId);
+        if (upgrade) {
+            upgrade.effect();
+        }
+        finishUpgrade();
+    };
+
+    function completeTransition() {
+        // ラウンドが進むごとに拡大率を指数関数的に増やす
+        const expansionFactor = 2 * Math.pow(1.2, currentRound - 1);
+        const scale = 1 / expansionFactor;
+
+        currentRound++;
+        roundEl.innerText = `RD ${currentRound}`;
+
+        // 全てのエンティティを縮小・中央寄せ（シームレスな拡大）
+        const rescale = (obj) => {
+            obj.x = width / 2 + (obj.x - width / 2) * scale;
+            obj.y = height / 2 + (obj.y - height / 2) * scale;
+            if (obj.radius) obj.radius *= scale;
+            if (obj.vx) obj.vx *= scale;
+            if (obj.vy) obj.vy *= scale;
+        };
+
+        rescale(slime);
+        humans.forEach(rescale);
+        bullets.forEach(rescale);
+        minions.forEach(rescale);
+        particles.forEach(p => {
+            p.x = width / 2 + (p.x - width / 2) * scale;
+            p.y = height / 2 + (p.y - height / 2) * scale;
+            p.vx *= scale;
+            p.vy *= scale;
+        });
+
+        // 新しく広がったエリア（外周）に人間を補充
+        // 拡大率に合わせて補充する人数も増やす
+        let spawnCount;
+        if (currentRound < 8) {
+            spawnCount = Math.floor(MAX_HUMANS * Math.pow(1.5, currentRound - 2));
+        } else {
+            if (currentRound === 8) {
+                // 8ラウンド開始時に人間の数を大幅に減らす
+                humans = humans.filter(h => h.isTank || Math.random() < 0.1);
+            }
+            // 8ラウンド以降は20人から開始し、ラウンド毎に10人ずつ増やす
+            spawnCount = 20 + (currentRound - 8) * 10;
+        }
+        const low = (1 - scale) / 2;
+        const high = (1 + scale) / 2;
+
+        for (let i = 0; i < spawnCount; i++) {
+            let h;
+            if (currentRound > 7 && Math.random() < 0.2) {
+                h = new Tank();
+            } else {
+                h = new Human();
+            }
+            let safe = false;
+            let attempts = 0;
+            const threshold = Math.min(slime.radius + 100, Math.min(width, height) * 0.3);
+            while(!safe && attempts < 100) {
+                attempts++;
+                h.x = random(0, width);
+                h.y = random(0, height);
+                const inOldArea = h.x > width * low && h.x < width * high && 
+                                 h.y > height * low && h.y < height * high;
+                if (!inOldArea) {
+                    const dist = Math.hypot(h.x - slime.x, h.y - slime.y);
+                    if (dist > threshold) safe = true;
+                }
+            }
+            humans.push(h);
+        }
+
+        isTransitioning = false;
+    }
+
+    function handleTap(tx, ty) {
+        for (const b of bombers) {
+            if (!b.active) continue;
+            const dx = Math.abs(tx - b.x);
+            const dy = Math.abs(ty - b.y);
+            if (dx < 40 && dy < 40) {
+                b.taps++;
+                b.hitTimer = 10;
+                createParticles(tx, ty, '#fff', 5, 2, 0.1);
+                if (b.taps >= 3) {
+                    destroyBomber(b);
+                }
+                break;
+            }
+        }
+    }
+
+    function destroyBomber(b) {
+        b.active = false;
+        score += 500;
+        scoreEl.innerText = `SCORE: ${score}`;
+        
+        const growthAmount = 300 * (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier;
+        slime.grow(growthAmount);
+        
+        createParticles(b.x, b.y, '#ffaa00', 30, 8, 0.02);
+        createParticles(b.x, b.y, '#ffffff', 20, 12, 0.04);
+        
+        checkLevelUp();
+    }
+
+    function absorbHuman(h, skipUIUpdate = false) {
+        score += h.isTank ? 10 : 1;
+        if (!skipUIUpdate) {
+            scoreEl.innerText = `SCORE: ${score}`;
+        }
+        if (h.isShooter || h.isTank) {
+            const multiplier = h.isTank ? 10 : 1;
+            const gaugeIncrement = Math.max(1, 10 / Math.pow(1.8, currentRound - 1)) * multiplier;
+            slime.specialGauge = Math.min(slime.maxSpecialGauge, slime.specialGauge + gaugeIncrement);
+            if (!skipUIUpdate) {
+                slime.updateSpecialUI();
+            }
+        }
+        const growthFactor = h.isTank ? 20 : 1;
+        const growthAmount = (0.5 / Math.pow(1.8, currentRound - 1)) * slime.growthMultiplier * growthFactor;
+        slime.grow(growthAmount);
+        createParticles(h.x, h.y, h.color);
+        h.die();
+        if (!skipUIUpdate) {
+            checkLevelUp();
+        }
+    }
+
+    let lastTime = 0;
+    function loop(timestamp) {
+        requestAnimationFrame(loop);
+        if (!lastTime) lastTime = timestamp;
+        const dt = Math.min(5, (timestamp - lastTime) / 16.666 || 1);
+        lastTime = timestamp;
+        
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        // Canvas context filter is buggy on mobile, so we use CSS filter on the canvas element instead
+        // Added -webkit-filter for iOS Safari compatibility
+        if (isSpecialAttacking && !isLowGraphics) {
+            if (!canvas.style.filter.includes('grayscale')) {
+                const filterValue = 'grayscale(100%) contrast(200%) brightness(1.2)';
+                canvas.style.webkitFilter = filterValue;
+                canvas.style.filter = filterValue;
+            }
+        } else {
+            if (canvas.style.filter !== '' && canvas.style.filter !== 'none') {
+                canvas.style.webkitFilter = '';
+                canvas.style.filter = '';
+            }
+        }
+        ctx.filter = 'none';
+
+        if (currentState === GameState.START) {
+            ctx.fillStyle = '#222';
+            ctx.fillRect(0, 0, width, height);
+            return;
+        }
+
+        if (currentState === GameState.GAMEOVER) {
+            return;
+        }
+
+        // 巨大化によるラウンド移行チェック
+        if (currentState === GameState.PLAYING && !isTransitioning && slime.radius * 2 > Math.min(width, height) / 3) {
+            isTransitioning = true;
+            transitionTimer = 120;
+        }
+
+        if (isPaused) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, width, height);
+            return;
+        }
+
+        if (isTransitioning) {
+            transitionTimer--;
+            const progress = 1 - (transitionTimer / 120);
+            
+            // 現在のラウンドに応じた目標スケールを計算
+            const targetExpansionFactor = 2 * Math.pow(1.2, currentRound - 1);
+            const targetScale = 1 / targetExpansionFactor;
+            
+            const scale = 1 - (progress * (1 - targetScale));
+
+            // 次のラウンドの背景色を「広がったフィールド」として描画
+            const nextBgColor = mapColors[currentRound % mapColors.length];
+            ctx.fillStyle = nextBgColor;
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.save();
+            // 中央に向かって縮小していく演出
+            ctx.translate(width / 2, height / 2);
+            ctx.scale(scale, scale);
+            ctx.translate(-width / 2, -height / 2);
+
+            // 元のフィールド範囲を描画
+            const currentBgColor = mapColors[(currentRound - 1) % mapColors.length];
+            ctx.fillStyle = currentBgColor;
+            ctx.fillRect(0, 0, width, height);
+            
+            // フィールドの境界線
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 5;
+            ctx.strokeRect(0, 0, width, height);
+
+            // 既存のエンティティを描画
+            slime.draw();
+            humans.forEach(h => h.draw());
+            bullets.forEach(b => b.draw());
+            minions.forEach(m => m.draw());
+            drawParticles();
+
+            ctx.restore();
+
+            if (transitionTimer <= 0) {
+                completeTransition();
+            }
+            return;
+        }
+
+        const bgColor = mapColors[(currentRound - 1) % mapColors.length];
+        ctx.fillStyle = bgColor;
+        ctx.globalAlpha = 0.4;
+        ctx.fillRect(0, 0, width, height);
+        ctx.globalAlpha = 1.0;
+
+        if (isSpecialAttacking) {
+            ctx.save();
+            
+            const shake = (120 - specialAttackTimer) / 5;
+            ctx.translate(Math.random() * shake - shake/2, Math.random() * shake - shake/2);
+            specialAttackTimer -= dt;
+        }
+
+        // --- エンティティ描画 ---
+        humans.forEach(h => {
+            if (!isSpecialAttacking) h.update();
+            if (h.active) {
+                h.draw();
+                if (!isSpecialAttacking) {
+                    const dist = Math.hypot(slime.x - h.x, slime.y - h.y);
+                    if (dist < slime.radius + h.radius + slime.absorbRangeBonus - 2) {
+                        absorbHuman(h);
+                    }
+                    minions.forEach(m => {
+                        const distMinion = Math.hypot(m.x - h.x, m.y - h.y);
+                        if (distMinion < m.radius + h.radius) {
+                            absorbHuman(h);
+                        }
+                    });
+                }
+            }
+        });
+
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            let b = bullets[i];
+            if (!isSpecialAttacking) b.update();
+            b.draw();
+            const dist = Math.hypot(b.x - slime.x, b.y - slime.y);
+            if (dist < slime.radius) {
+                slime.damage(b.damage); 
+                b.markedForDeletion = true;
+            }
+            if (b.markedForDeletion) bullets.splice(i, 1);
+        }
+
+        for (let i = minions.length - 1; i >= 0; i--) {
+            let m = minions[i];
+            if (!isSpecialAttacking) m.update();
+            m.draw();
+            if (m.markedForDeletion) minions.splice(i, 1);
+        }
+
+        if (!isSpecialAttacking) slime.update();
+        slime.draw();
+
+        if (!isSpecialAttacking) updateParticles();
+        drawParticles();
+
+        // --- 新規：爆撃機と爆弾の処理 ---
+        if (!isSpecialAttacking && currentState === GameState.PLAYING) {
+            // 爆撃機のスポーン (ラウンド10以降)
+            if (currentRound >= 10) {
+                bomberSpawnTimer--;
+                if (bomberSpawnTimer <= 0) {
+                    bombers.push(new Bomber());
+                    bomberSpawnTimer = random(180, 400); 
+                }
+            }
+            
+            // 爆撃機の更新と描画
+            for (let i = bombers.length - 1; i >= 0; i--) {
+                const b = bombers[i];
+                b.update();
+                b.draw();
+                if (!b.active) bombers.splice(i, 1);
+            }
+            
+            // 爆弾の更新と描画
+            for (let i = bombs.length - 1; i >= 0; i--) {
+                const b = bombs[i];
+                b.update();
+                b.draw();
+                if (b.markedForDeletion) bombs.splice(i, 1);
+            }
+            
+            // 核爆弾の処理 (ラウンド15)
+            if (currentRound >= 15 && !nukeEventTriggered) {
+                nukeEventTriggered = true;
+                nuke = new Nuke();
+            }
+            
+            if (nuke) {
+                nuke.update();
+                nuke.draw();
+            }
+        }
+
+        if (isSpecialAttacking) {
+            // ビーム演出
+            ctx.save();
+            ctx.translate(slime.x, slime.y);
+            const beamCount = isLowGraphics ? 12 : 32;
+            const angleStep = (Math.PI * 2) / beamCount;
+            const timeFactor = Math.max(0, specialAttackTimer / 120); // 1.0 -> 0.0
+            const progress = 1 - timeFactor; // 0.0 -> 1.0
+            
+            for(let i=0; i<beamCount; i++) {
+                const angle = i * angleStep + progress * 8;
+                const length = Math.max(width, height) * 2;
+                
+                // 放射状の線
+                ctx.strokeStyle = i % 2 === 0 ? '#fff' : '#888';
+                ctx.lineWidth = 2 + progress * 20;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(Math.cos(angle) * length, Math.sin(angle) * length);
+                ctx.stroke();
+
+                // 追加の細い光
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(Math.cos(angle + 0.1) * length, Math.sin(angle + 0.1) * length);
+                ctx.stroke();
+            }
+
+            // 中心からの衝撃波
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 5;
+            ctx.beginPath();
+            ctx.arc(0, 0, progress * Math.max(width, height), 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.restore();
+
+            // 画面全体へのノイズ的な演出
+            if (!isLowGraphics && Math.random() < 0.5) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.fillRect(0, Math.random() * height, width, Math.random() * 10 + 2);
+            }
+
+            // 最初のsaveに対応するrestore (ctx.filterの解除)
+            ctx.restore();
+
+            if (specialAttackTimer <= 0) {
+                // 明転
+                flashAlpha = 1.0;
+                
+                // 全吸収
+                humans.forEach(h => {
+                    if (h.active) {
+                        absorbHuman(h, true);
+                    }
+                });
+                
+                // リセット
+                slime.specialGauge = 0;
+                
+                // まとめてUI更新
+                scoreEl.innerText = `SCORE: ${score}`;
+                slime.updateSpecialUI();
+                checkLevelUp();
+                
+                isSpecialAttacking = false;
+            }
+        }
+
+        // --- 明転エフェクト ---
+        if (flashAlpha > 0) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
+            ctx.fillRect(0, 0, width, height);
+            flashAlpha -= 0.05;
+        }
+    }
+
+    loop();
+
+    // デバッグ用チートコマンド
+    window.cheatInvincible = function() {
+        if (!slime) return "Game not started";
+        slime.isInvincible = !slime.isInvincible;
+        slime.updateSpecialUI();
+        console.log("Invincibility: " + (slime.isInvincible ? "ON" : "OFF"));
+        return slime.isInvincible;
+    };
